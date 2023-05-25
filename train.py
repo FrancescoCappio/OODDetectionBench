@@ -15,7 +15,7 @@ from utils.log_utils import count_parameters
 from models.evaluators import *
 
 def get_args():
-    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser = argparse.ArgumentParser("OODDetectionBench")
 
     parser.add_argument("--local_rank", type=int)  # automatically passed by torch.distributed.launch
 
