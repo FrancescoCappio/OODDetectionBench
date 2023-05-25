@@ -28,6 +28,7 @@ Competitors involved:
 
 The pretrained models for CutMix, SimCLR and SupCLR, CSI, supCSI should be downloaded and put in the
 `pretrained_models` directory. 
+In order to enable easy results replication we collected the torch versions of all the needed models [here](https://drive.google.com/file/d/1zRxNO9uiZUdAwXYGA5EJkURobbD9dwOn/view?usp=sharing).
 
 ### Table 1
 
