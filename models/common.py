@@ -36,3 +36,27 @@ class CSIContrastiveHead(nn.Module):
     def forward(self, x):
         return self.simclr_layer(x)
 
+class WrapperWithFC(nn.Module):
+    """
+    Wrap a base model adding a final fc on top of it
+    """
+    def __init__(self, base_model, out_dim, n_classes, half_precision=False):
+        """
+        Arguments: 
+            base_model (nn.Module)
+            out_dim (int): output size of the base model 
+            n_classes (int): output_size of the wrapper
+            half_precision (bool): use half precision for fc
+        """
+        super().__init__()
+        self.base_model = base_model 
+        self.fc = nn.Linear(in_features=out_dim, out_features=n_classes)
+        self.half_precision = half_precision
+        if half_precision:
+            self.fc = self.fc.half()
+
+    def forward(self, x):
+        if self.half_precision:
+            x = x.half()
+        feats = self.base_model(x)
+        return self.fc(feats), feats

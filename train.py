@@ -124,34 +124,12 @@ class Trainer:
                 self.clip_preprocessor = preprocess
                 # substitute preprocess with CLIP's one
                 self.substitute_val_preprocessor(preprocess)
-                # this model has no fc, we should add it 
-                self.model = model.visual
                 self.clip_model = model
+
+                # the model has no fc by default, so it does not support closed set finetuning
+                from models.common import WrapperWithFC
                 self.output_num = 512
-
-                self.model.fc = nn.Linear(in_features=self.output_num, out_features=self.n_known_classes).half()
-
-                def feats_forward(self, x):
-                    def stem(x):
-                        x = self.relu1(self.bn1(self.conv1(x)))
-                        x = self.relu2(self.bn2(self.conv2(x)))
-                        x = self.relu3(self.bn3(self.conv3(x)))
-                        x = self.avgpool(x)
-                        return x
-
-                    x = x.type(self.conv1.weight.dtype)
-                    x = stem(x)
-                    x = self.layer1(x)
-                    x = self.layer2(x)
-                    x = self.layer3(x)
-                    x = self.layer4(x)
-                    x = self.attnpool(x)
-
-                    logits = self.fc(x)
-
-                    return logits, x
-
-                self.model.forward = types.MethodType(feats_forward, self.model)
+                self.model = WrapperWithFC(model.visual, self.output_num, self.n_known_classes, half_precision=True)
                 self.model = self.model.to(device)
             else:
                 raise NotImplementedError(f"Model {self.args.model} is not supported with network {self.args.network}")
@@ -182,38 +160,12 @@ class Trainer:
                 self.clip_preprocessor = preprocess
                 # substitute preprocess with CLIP's one
                 self.substitute_val_preprocessor(preprocess)
-                # this model has no fc, we should add it 
-                self.model = model.visual
                 self.clip_model = model
+                # the model has no fc by default, so it does not support closed set finetuning
+                from models.common import WrapperWithFC
                 self.output_num = 768
-                self.model.fc = nn.Linear(in_features=self.output_num, out_features=self.n_known_classes).half()
-
-                def feats_forward(self, x):
-
-                    x = x.type(self.conv1.weight.dtype)
-                    x = self.conv1(x)  # shape = [*, width, grid, grid]
-                    x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
-                    x = x.permute(0, 2, 1)  # shape = [*, grid ** 2, width]
-                    x = torch.cat([self.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=1)  # shape = [*, grid ** 2 + 1, width]
-                    x = x + self.positional_embedding.to(x.dtype)
-                    x = self.ln_pre(x)
-
-                    x = x.permute(1, 0, 2)  # NLD -> LND
-                    x = self.transformer(x)
-                    x = x.permute(1, 0, 2)  # LND -> NLD
-
-                    x = self.ln_post(x[:, 0, :])
-
-                    if self.proj is not None:
-                        x = x @ self.proj
-
-                    logits = self.fc(x)
-
-                    return logits, x
-
-                self.model.forward = types.MethodType(feats_forward, self.model)
+                self.model = WrapperWithFC(model.visual, self.output_num, self.n_known_classes, half_precision=True)
                 self.model = self.model.to(device)
-
             else:
                 raise NotImplementedError(f"Model {self.args.model} is not supported with network {self.args.network}")
         else:
