@@ -4,7 +4,7 @@ from torchvision import models
 import types
 
 
-def get_resnet(network, device, ckpt=None, n_known_classes=1000):
+def get_resnet(network, ckpt=None, n_known_classes=1000):
 
     if network != "resnet101":
         raise NotImplementedError(f"Unknown network {network}")
@@ -35,7 +35,5 @@ def get_resnet(network, device, ckpt=None, n_known_classes=1000):
         return self.fc(x), x 
 
     model.forward = types.MethodType(feats_forward, model)
-
-    model = model.to(device)
 
     return model, output_num

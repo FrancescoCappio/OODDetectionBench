@@ -2,9 +2,6 @@ import torch
 from ood_metrics import calc_metrics as calc_ood_metrics
 from tqdm import tqdm 
 
-def normalize(feats):
-    return feats/feats.norm(dim=1,keepdim=True).expand(-1,feats.shape[1])
-
 def prepare_ood_labels(known_labels, test_labels):
     # 0 means OOD
     # 1 means ID
@@ -13,7 +10,7 @@ def prepare_ood_labels(known_labels, test_labels):
     return ood_labels
 
 @torch.no_grad()
-def run_model(model, loader, device, contrastive_head=None):
+def run_model(model, loader, device, contrastive=False):
 
     feats_list = []
     logits_list = []
@@ -21,9 +18,11 @@ def run_model(model, loader, device, contrastive_head=None):
 
     for images, target in tqdm(loader):
         images = images.to(device)
-        out, feats = model(images)
-        if contrastive_head is not None:
-            feats = normalize(contrastive_head(feats))
+        if contrastive:
+            out, contrastive_feats = model(images, contrastive=True)
+            feats = contrastive_feats
+        else:
+            out, feats = model(images)
 
         feats_list.append(feats.cpu())
         gt_list.append(target)

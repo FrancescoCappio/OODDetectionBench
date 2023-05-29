@@ -9,7 +9,6 @@ import os
 
 from models.resnet import get_resnet
 from models.data_helper import get_eval_dataloader, get_train_dataloader, split_train_loader, check_data_consistency
-from utils.ckpt_utils import sanitize_ckpt, sanitize_simclr_ckpt, sanitize_CSI_ckpt
 from utils.log_utils import count_parameters
 
 from models.evaluators import *
@@ -35,7 +34,7 @@ def get_args():
     parser.add_argument("--model", type=str, default="CE", choices=["CE", "simclr", "supclr", "cutmix", "CSI", "supCSI", "clip"])
     parser.add_argument("--evaluator", type=str, help="Strategy to compute normality scores", default="prototypes_distance",
                         choices=["prototypes_distance", "MSP", "ODIN", "energy", "gradnorm", "mahalanobis", "gram", "knn_distance",
-                                 "linear_probe", "MCM"])
+                                 "linear_probe", "MCM", "knn_ood"])
 
     # evaluators-specific parameters 
     parser.add_argument("--NNK", help="K value to use for Knn distance evaluator", type=int, default=1)
@@ -56,7 +55,7 @@ def get_args():
     # checkpoint evaluation
     parser.add_argument("--only_eval", action='store_true', default=False,
                         help="If you want only to evaluate a checkpoint")
-    parser.add_argument("--checkpoint_path", help="Path to pretrained checkpoint")
+    parser.add_argument("--checkpoint_path", type=str, default="", help="Path to pretrained checkpoint")
 
     # output_folder for checkpoints
     parser.add_argument("--save_ckpt", action='store_true', default=False, help="Should save the training output checkpoint to --output_dir?")
@@ -82,45 +81,48 @@ class Trainer:
             self.source_loader_test, self.source_loader_val = split_train_loader(self.source_loader_test, args.seed)
 
         self.n_known_classes = n_known_classes
-        self.contrastive_head = None
+        self.contrastive_enabled = False
         print(f"Model: {self.args.model}, Backbone: {self.args.network}")
+
+        ckpt = torch.load(self.args.checkpoint_path) if self.args.checkpoint_path else None
 
         # setup the network and OOD model 
         if self.args.network == "resnet101":
-            if self.args.model == "CE":
-                self.model, self.output_num = get_resnet(self.args.network, self.device, n_known_classes=self.n_known_classes)
+            if self.args.model in ["CE", "cutmix"]:
+                if self.args.model == "cutmix" and self.args.only_eval:
+                    assert ckpt is not None, "Cannot perform eval without a pretrained model"
 
-            elif self.args.model in ["simclr", "supclr"]:
-                ckpt_path = self.args.checkpoint_path
-                ckpt = torch.load(ckpt_path)
-                print('checkpoint loaded')
-                self.model, self.output_num = get_resnet(self.args.network, self.device, ckpt=sanitize_simclr_ckpt(ckpt["resnet"])["backbone"], n_known_classes=self.n_known_classes)
-                from models.common import SimCLRContrastiveHead
-                self.contrastive_head = SimCLRContrastiveHead(channels_in=self.output_num)
-                self.contrastive_head.load_state_dict(ckpt['head'],strict=True)
-                self.contrastive_head = self.contrastive_head.to(device)
+                self.model, self.output_num = get_resnet(self.args.network, n_known_classes=self.n_known_classes)
 
-            elif self.args.model in ["CSI", "supCSI"]:
-                ckpt_path = self.args.checkpoint_path
-                ckpt = sanitize_CSI_ckpt(torch.load(ckpt_path))
-                print('checkpoint loaded')
-                self.model, self.output_num = get_resnet(self.args.network, self.device, ckpt=ckpt['backbone'], n_known_classes=self.n_known_classes)
-                from models.common import CSIContrastiveHead
-                self.contrastive_head = CSIContrastiveHead(channels_in=self.output_num)
-                self.contrastive_head.load_state_dict(ckpt['head'],strict=True)
-                self.contrastive_head = self.contrastive_head.to(device)
+                # if ckpt fc size does not match current size discard it
+                if ckpt is not None: 
+                    old_size = ckpt["fc.bias"].shape
+                    if not old_size == self.n_known_classes:
+                        del ckpt["fc.weight"]
+                        del ckpt["fc.bias"]
 
-            elif self.args.model == "cutmix":
-                ckpt = torch.load(args.checkpoint_path)
-                print('checkpoint loaded')
-                ckpt = sanitize_ckpt(ckpt['state_dict'])
-                self.model, self.output_num = get_resnet(self.args.network, self.device, ckpt=ckpt, n_known_classes=self.n_known_classes)
-            
+            elif self.args.model in ["simclr", "supclr", "CSI", "supCSI"]:
+                self.contrastive_enabled = True
+                if self.args.only_eval:
+                    assert ckpt is not None, "Cannot perform eval without a pretrained model"
+
+                contrastive_type = "simclr" if self.args.model in ["simclr", "supclr"] else "CSI"
+
+                from models.common import WrapperWithContrastiveHead
+                base_model, self.output_num = get_resnet(self.args.network, n_known_classes=self.n_known_classes)
+                self.model = WrapperWithContrastiveHead(base_model, out_dim=self.output_num, contrastive_type=contrastive_type)
+                
+                # if ckpt fc size does not match current size discard it
+                if ckpt is not None: 
+                    old_size = ckpt["base_model.fc.bias"].shape
+                    if not old_size == self.n_known_classes:
+                        del ckpt["base_model.fc.weight"]
+                        del ckpt["base_model.fc.bias"]
+
             elif self.args.model == "clip":
                 import clip 
-                import types
 
-                model, preprocess = clip.load("RN101", device)
+                model, preprocess = clip.load("RN101", self.device)
                 self.clip_preprocessor = preprocess
                 # substitute preprocess with CLIP's one
                 self.substitute_val_preprocessor(preprocess)
@@ -130,7 +132,6 @@ class Trainer:
                 from models.common import WrapperWithFC
                 self.output_num = 512
                 self.model = WrapperWithFC(model.visual, self.output_num, self.n_known_classes, half_precision=True)
-                self.model = self.model.to(device)
             else:
                 raise NotImplementedError(f"Model {self.args.model} is not supported with network {self.args.network}")
 
@@ -148,15 +149,14 @@ class Trainer:
                     return x, feats
 
                 model.forward = types.MethodType(my_forward, model)
-                self.model = model.to(device)
+                self.model = model
                 self.output_num = 768
 
             elif self.args.model == "clip":
                 # ViT-L/14
                 import clip 
-                import types
 
-                model, preprocess = clip.load("ViT-L/14", device)
+                model, preprocess = clip.load("ViT-L/14", self.device)
                 self.clip_preprocessor = preprocess
                 # substitute preprocess with CLIP's one
                 self.substitute_val_preprocessor(preprocess)
@@ -165,11 +165,17 @@ class Trainer:
                 from models.common import WrapperWithFC
                 self.output_num = 768
                 self.model = WrapperWithFC(model.visual, self.output_num, self.n_known_classes, half_precision=True)
-                self.model = self.model.to(device)
             else:
                 raise NotImplementedError(f"Model {self.args.model} is not supported with network {self.args.network}")
         else:
             raise NotImplementedError(f"Network {self.args.network} not implemented")
+
+        if ckpt is not None: 
+            print(f"Loading checkpoint {self.args.checkpoint_path}")
+            missing, unexpected = self.model.load_state_dict(ckpt, strict=False)
+            print(f"Missing keys: {missing}, unexpected keys: {unexpected}")
+
+        self.to_device(self.device)
 
         print("Number of parameters: ", count_parameters(self.model))
 
@@ -186,20 +192,16 @@ class Trainer:
 
     def to_eval(self):
         self.model.eval()
-        if self.contrastive_head is not None:
-            self.contrastive_head.eval()
 
     def to_train(self):
         self.model.train()
-        if self.contrastive_head is not None:
-            self.contrastive_head.train()
 
     def do_final_eval(self):
         self.to_eval()
 
         if self.args.evaluator == "prototypes_distance":
             metrics = prototypes_distance_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
-                                                    device=self.device, model=self.model, contrastive_head=self.contrastive_head)
+                                                    device=self.device, model=self.model, contrastive=self.contrastive_enabled)
         elif self.args.evaluator == "MSP":
             metrics = MSP_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
@@ -227,13 +229,17 @@ class Trainer:
             metrics = gram_evaluator(train_loader=self.source_loader_test, val_loader=self.source_loader_val, 
                                                     test_loader=self.target_loader, device=self.device, model=self.model, finetuned=not self.args.only_eval)
 
+        elif self.args.evaluator == "knn_ood":
+            metrics = knn_ood_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
+                                                    device=self.device, model=self.model, contrastive=self.contrastive_enabled, K=self.args.NNK)
+
         elif self.args.evaluator == "knn_distance":
             metrics = knn_distance_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
-                                                    device=self.device, model=self.model, contrastive_head=self.contrastive_head, K=self.args.NNK)
+                                                    device=self.device, model=self.model, contrastive=self.contrastive_enabled, K=self.args.NNK)
 
         elif self.args.evaluator == "linear_probe":
             metrics = linear_probe_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
-                                                    device=self.device, model=self.model, contrastive_head=self.contrastive_head)
+                                                    device=self.device, model=self.model, contrastive=self.contrastive_enabled)
 
         elif self.args.evaluator == "MCM":
             assert self.args.model == "clip", "MCM evaluator supports only clip based models!"

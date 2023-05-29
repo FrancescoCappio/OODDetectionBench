@@ -14,9 +14,11 @@ OOD detection task, before evaluating a specific model, or to directly evaluate 
 
 The dependencies are listed in the `requirements.txt` file.
 
-The pretrained models for CutMix, SimCLR and SupCLR, CSI, supCSI should be downloaded and put in the
-`pretrained_models` directory. 
-In order to enable easy results replication we collected the torch versions of all the needed models [here](https://drive.google.com/file/d/1zRxNO9uiZUdAwXYGA5EJkURobbD9dwOn/view?usp=sharing).
+We downloaded the public models for resnet101 versions of CutMix, SimCLR, SupCLR, CSI, supCSI from
+the original repositories and converted them to make them compatible with our framework. 
+Converted models can be found
+[here](https://drive.google.com/file/d/1w41RjKaOx5tbOcb3AleAWAOTzNxEw9ap/view?usp=sharing)
+Downloaded models should be put in `pretrained_models` directory. 
 
 ## Citation 
 

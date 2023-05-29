@@ -1,6 +1,7 @@
 import torch
 import clip
-from models.evaluators.common import prepare_ood_labels, calc_ood_metrics, run_model, normalize
+from models.evaluators.common import prepare_ood_labels, calc_ood_metrics, run_model
+from models.common import normalize_feats
 
 @torch.no_grad()
 def MCM_evaluator(train_loader, test_loader, model, clip_model, device, known_class_names): 
@@ -12,7 +13,7 @@ def MCM_evaluator(train_loader, test_loader, model, clip_model, device, known_cl
 
     # first we extract features for test data
     test_logits, test_feats, test_lbls = run_model(model, test_loader, device)
-    test_feats = normalize(test_feats)
+    test_feats = normalize_feats(test_feats)
 
     # known labels have 1 for known samples and 0 for unknown ones
     train_lbls = train_loader.dataset.labels
@@ -26,7 +27,7 @@ def MCM_evaluator(train_loader, test_loader, model, clip_model, device, known_cl
     text_inputs = torch.cat([clip.tokenize(f"a photo of a {c}.") for c in known_class_names]).to(device)
     
     concept_prototypes = clip_model.to(device).encode_text(text_inputs)
-    concept_prototypes = normalize(concept_prototypes).cpu()
+    concept_prototypes = normalize_feats(concept_prototypes).cpu()
 
     # compute the cos sim
     cos_sim_logits = torch.matmul(test_feats, concept_prototypes.T)
