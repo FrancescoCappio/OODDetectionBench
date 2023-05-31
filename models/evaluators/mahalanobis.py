@@ -27,7 +27,6 @@ def mahalanobis_evaluator(train_loader, test_loader, device, model):
     # known labels have 1 for known samples and 0 for unknown ones
     known_labels = torch.unique(torch.tensor(train_lbls))
 
-
     with torch.no_grad():
         example_input = train_loader.dataset[0][0].to(device).unsqueeze(0)
         n_known_classes = len(known_labels)
@@ -69,55 +68,16 @@ def mahalanobis_evaluator(train_loader, test_loader, device, model):
         metrics = calc_ood_metrics(m_scores[l], ood_labels)
         print(f"Layer {l} auroc: {metrics['auroc']:.4f}, fpr95: {metrics['fpr_at_95_tpr']:.4f}")
 
-    return calc_ood_metrics(m_scores[4], ood_labels)
+    return calc_ood_metrics(m_scores[-1], ood_labels)
 
 # function to extract the multiple features
 def model_feature_list(model, x):
-    out_list = []
-
-    x = model.conv1(x)
-    x = model.bn1(x)
-    x = model.relu(x)
-    x = model.maxpool(x)
-    out_list.append(x)
-    x = model.layer1(x)
-    out_list.append(x)
-    x = model.layer2(x)
-    out_list.append(x)
-    x = model.layer3(x)
-    out_list.append(x)
-    x = model.layer4(x)
-    out_list.append(x)
-    x = model.avgpool(x)
-    x = x.view(x.size(0), -1)
-
-    y = model.fc(x)
-    return y, out_list
+    logits, feats = model(x)
+    return logits, [feats]
 
 # function to extract a specific feature
 def model_intermediate_forward(model, x, layer_index):
-    x = model.conv1(x)
-    x = model.bn1(x)
-    x = model.relu(x)
-    x = model.maxpool(x)
-
-    if layer_index == 0:
-        return x
-
-    x = model.layer1(x)
-    if layer_index == 1:
-        return x
-
-    x = model.layer2(x)
-    if layer_index == 2:
-        return x
-    
-    x = model.layer3(x)
-    if layer_index == 3:
-        return x
-    
-    x = model.layer4(x)               
-    return x
+    return model(x)[1]
 
 def sample_estimator(model, num_classes, feature_list, train_loader, device):
     """
@@ -144,10 +104,6 @@ def sample_estimator(model, num_classes, feature_list, train_loader, device):
         data = data.to(device)
         output, out_features = model_feature_list(model, data)
         
-        # for each output layer, for each sample, compute mean for each channel
-        for i in range(num_output_layers):
-            out_features[i] = torch.flatten(out_features[i], start_dim=2).mean(dim=2)
-            
         # compute the accuracy
         correct += (output.argmax(1).cpu() == target).sum()
         
@@ -220,7 +176,6 @@ def get_Mahalanobis_score(model, test_loader, num_classes, net_type, sample_mean
         data.requires_grad = True
         
         out_features = model_intermediate_forward(model, data, layer_index)
-        out_features = torch.flatten(out_features, start_dim=2).mean(dim=2)
         
         # compute Mahalanobis score
         gaussian_score = 0
@@ -260,7 +215,6 @@ def get_Mahalanobis_score(model, test_loader, num_classes, net_type, sample_mean
  
         # perform forward again 
         noise_out_features = model_intermediate_forward(model, tempInputs, layer_index)
-        noise_out_features = torch.flatten(noise_out_features, start_dim=2).mean(dim=2)
 
         noise_gaussian_score = 0
         for i in range(num_classes):
