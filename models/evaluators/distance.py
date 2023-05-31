@@ -31,7 +31,7 @@ def get_cos_sim_normality_scores(test_features, prototypes):
 
     return test_scores
 
-def compute_prototypes(train_feats, train_lbls, contrastive = False):
+def compute_prototypes(train_feats, train_lbls, normalize=False):
 
     classes = torch.unique(train_lbls)
     prototypes = torch.zeros((len(classes),train_feats.shape[1]))
@@ -40,25 +40,25 @@ def compute_prototypes(train_feats, train_lbls, contrastive = False):
         prt = train_feats[train_lbls == cl].mean(dim=0)
         prototypes[idx] = prt
     
-    if contrastive:
+    if normalize:
         prototypes = normalize_feats(prototypes)
 
     return prototypes
 
 @torch.no_grad()
-def prototypes_distance_evaluator(train_loader, test_loader, device, model, contrastive=False): 
+def prototypes_distance_evaluator(train_loader, test_loader, device, model, contrastive_head=False, cosine_sim=False): 
     # first we extract features for both source and target data
-    train_logits, train_feats, train_lbls = run_model(model, train_loader, device, contrastive=contrastive)
-    test_logits, test_feats, test_lbls = run_model(model, test_loader, device, contrastive=contrastive)
+    train_logits, train_feats, train_lbls = run_model(model, train_loader, device, contrastive=contrastive_head)
+    test_logits, test_feats, test_lbls = run_model(model, test_loader, device, contrastive=contrastive_head)
 
     # known labels have 1 for known samples and 0 for unknown ones
     known_labels = torch.unique(train_lbls)
-    prototypes = compute_prototypes(train_feats, train_lbls, contrastive=contrastive)
+    prototypes = compute_prototypes(train_feats, train_lbls, normalize=cosine_sim)
     ood_labels = prepare_ood_labels(known_labels, test_lbls)
 
     print(f"Num known: {ood_labels.sum()}. Num unknown: {len(test_lbls) - ood_labels.sum()}.")
 
-    if contrastive:
+    if cosine_sim:
         test_normality_scores = get_cos_sim_normality_scores(test_feats, prototypes)
     else:
         test_normality_scores = get_euclidean_normality_scores(test_feats, prototypes)
@@ -68,12 +68,12 @@ def prototypes_distance_evaluator(train_loader, test_loader, device, model, cont
     return metrics 
 
 @torch.no_grad()
-def knn_distance_evaluator(train_loader, test_loader, device, model, contrastive=False, K=50, normalize=False): 
+def knn_distance_evaluator(train_loader, test_loader, device, model, contrastive_head=False, K=50, normalize=False, cosine_sim=False): 
     # implements ICML 2022: https://proceedings.mlr.press/v162/sun22d.html
     # first we extract features for both source and target data
     print(f"Running KNN distance evaluator with K={K}")
-    train_logits, train_feats, train_lbls = run_model(model, train_loader, device, contrastive=contrastive)
-    test_logits, test_feats, test_lbls = run_model(model, test_loader, device, contrastive=contrastive)
+    train_logits, train_feats, train_lbls = run_model(model, train_loader, device, contrastive=contrastive_head)
+    test_logits, test_feats, test_lbls = run_model(model, test_loader, device, contrastive=contrastive_head)
 
     # known labels have 1 for known samples and 0 for unknown ones
     known_labels = torch.unique(train_lbls)
@@ -83,7 +83,7 @@ def knn_distance_evaluator(train_loader, test_loader, device, model, contrastive
         train_feats = normalize_feats(train_feats)
         test_feats = normalize_feats(test_feats)
 
-    if contrastive: 
+    if cosine_sim: 
         # returns neighbours with decreasing similarity (nearest to farthest) 
         index = faiss.IndexFlatIP(train_feats.shape[1])
     else:
@@ -94,7 +94,7 @@ def knn_distance_evaluator(train_loader, test_loader, device, model, contrastive
     D, _ = index.search(test_feats.numpy(), K)
 
     test_normality_scores = D[:,-1]
-    if not contrastive:
+    if not cosine_sim:
         # (inverted) distance from Kth nearest neighbour is the normality score 
         test_normality_scores *= -1
 
@@ -105,10 +105,10 @@ def knn_distance_evaluator(train_loader, test_loader, device, model, contrastive
     return metrics 
 
 @torch.no_grad()
-def knn_ood_evaluator(train_loader, test_loader, device, model, contrastive=False, K=50): 
+def knn_ood_evaluator(train_loader, test_loader, device, model, contrastive_head=False, K=50): 
     # implements ICML 2022: https://proceedings.mlr.press/v162/sun22d.html
     # similar to standard knn evaluator, but apply normalize before L2 distance
 
-    return knn_distance_evaluator(train_loader, test_loader, device, model, contrastive=contrastive, K=K, normalize=True)
+    return knn_distance_evaluator(train_loader, test_loader, device, model, contrastive_head=contrastive_head, K=K, normalize=True)
 
 

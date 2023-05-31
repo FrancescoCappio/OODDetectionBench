@@ -4,7 +4,6 @@ from numpy import test
 
 import torch
 from torch import nn, optim
-from tqdm import tqdm
 import os
 
 from models.resnet import get_resnet
@@ -31,13 +30,14 @@ def get_args():
 
     # model parameters
     parser.add_argument("--network", type=str, default="resnet101", choices=["resnet101", "vit"])
-    parser.add_argument("--model", type=str, default="CE", choices=["CE", "simclr", "supclr", "cutmix", "CSI", "supCSI", "clip"])
+    parser.add_argument("--model", type=str, default="CE", choices=["CE", "simclr", "supclr", "cutmix", "CSI", "supCSI", "clip", "DINO"])
     parser.add_argument("--evaluator", type=str, help="Strategy to compute normality scores", default="prototypes_distance",
                         choices=["prototypes_distance", "MSP", "ODIN", "energy", "gradnorm", "mahalanobis", "gram", "knn_distance",
                                  "linear_probe", "MCM", "knn_ood"])
 
     # evaluators-specific parameters 
     parser.add_argument("--NNK", help="K value to use for Knn distance evaluator", type=int, default=1)
+    parser.add_argument("--disable_contrastive_head", action='store_true', default=False, help="Do not use contrastive head for distance-based evaluators")
 
     # data params
     parser.add_argument("--image_size", type=int, default=224, help="Image size")
@@ -102,7 +102,7 @@ class Trainer:
                         del ckpt["fc.bias"]
 
             elif self.args.model in ["simclr", "supclr", "CSI", "supCSI"]:
-                self.contrastive_enabled = True
+                self.contrastive_enabled = not args.disable_contrastive_head
                 if self.args.only_eval:
                     assert ckpt is not None, "Cannot perform eval without a pretrained model"
 
@@ -136,7 +136,7 @@ class Trainer:
                 raise NotImplementedError(f"Model {self.args.model} is not supported with network {self.args.network}")
 
         elif self.args.network == "vit":
-            if self.args.model == "CE":
+            if self.args.model in ["CE", "DINO"]:
 
                 import timm
                 import types
@@ -149,14 +149,20 @@ class Trainer:
                     return x, feats
 
                 model.forward = types.MethodType(my_forward, model)
-                self.model = model
                 self.output_num = 768
+
+                if self.args.model == "DINO":
+                    self.contrastive_enabled = not args.disable_contrastive_head
+                    from models.common import WrapperWithContrastiveHead
+                    self.model = WrapperWithContrastiveHead(model, out_dim=self.output_num, contrastive_type="DINO")
+                else:
+                    self.model = model
 
             elif self.args.model == "clip":
                 # ViT-L/14
                 import clip 
 
-                model, preprocess = clip.load("ViT-L/14", self.device)
+                model, preprocess = clip.load("ViT-B/16", self.device)
                 self.clip_preprocessor = preprocess
                 # substitute preprocess with CLIP's one
                 self.substitute_val_preprocessor(preprocess)
@@ -165,6 +171,7 @@ class Trainer:
                 from models.common import WrapperWithFC
                 self.output_num = 768
                 self.model = WrapperWithFC(model.visual, self.output_num, self.n_known_classes, half_precision=True)
+
             else:
                 raise NotImplementedError(f"Model {self.args.model} is not supported with network {self.args.network}")
         else:
@@ -199,9 +206,14 @@ class Trainer:
     def do_final_eval(self):
         self.to_eval()
 
+        # when using the contrastive head and a model trained with cosine-similarity-based loss we need to use cosine
+        # similarity based scores instead of L2 distance based ones
+        cosine_similarity = self.args.model in ["simclr", "supclr", "CSI", "supCSI"] and self.contrastive_enabled
+
         if self.args.evaluator == "prototypes_distance":
             metrics = prototypes_distance_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
-                                                    device=self.device, model=self.model, contrastive=self.contrastive_enabled)
+                                                    device=self.device, model=self.model, contrastive_head=self.contrastive_enabled,
+                                                    cosine_sim=cosine_similarity)
         elif self.args.evaluator == "MSP":
             metrics = MSP_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
@@ -227,19 +239,20 @@ class Trainer:
                 print("The gram evaluator exploits cls predictions on train data to estimate statistics that are later used for computing normality scores.")
                 print("If the model is not finetuned the statistics will not be much relevant")
             metrics = gram_evaluator(train_loader=self.source_loader_test, val_loader=self.source_loader_val, 
-                                                    test_loader=self.target_loader, device=self.device, model=self.model, finetuned=not self.args.only_eval)
+                                    test_loader=self.target_loader, device=self.device, model=self.model, finetuned=not self.args.only_eval)
 
         elif self.args.evaluator == "knn_ood":
             metrics = knn_ood_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
-                                                    device=self.device, model=self.model, contrastive=self.contrastive_enabled, K=self.args.NNK)
+                                        device=self.device, model=self.model, contrastive_head=self.contrastive_enabled, K=self.args.NNK)
 
         elif self.args.evaluator == "knn_distance":
             metrics = knn_distance_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
-                                                    device=self.device, model=self.model, contrastive=self.contrastive_enabled, K=self.args.NNK)
+                                            device=self.device, model=self.model, contrastive_head=self.contrastive_enabled, K=self.args.NNK,
+                                            cosine_sim=cosine_similarity)
 
         elif self.args.evaluator == "linear_probe":
             metrics = linear_probe_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
-                                                    device=self.device, model=self.model, contrastive=self.contrastive_enabled)
+                                            device=self.device, model=self.model, contrastive_head=self.contrastive_enabled)
 
         elif self.args.evaluator == "MCM":
             assert self.args.model == "clip", "MCM evaluator supports only clip based models!"
