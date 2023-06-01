@@ -90,9 +90,14 @@ def get_eval_dataloader(args):
     if args.few_shot > 0: 
         names_sources, labels_sources = few_shot_subsample(names_sources, labels_sources, n_shots=args.few_shot, seed=args.seed)
 
-    if source in ["Stanford-Cars", "CUB-200", "Oxford-Pet"]:
+    if dataset == "MCM_benchmarks" and source in ["Stanford-Cars", "CUB-200", "Oxford-Pet"]:
         class_names_file = f"data/txt_lists/MCM_benchmarks/{source}_names.txt"
 
+        with open(class_names_file, "r") as f:
+            names = f.readlines()
+        known_class_names = [name.strip() for name in names]
+    elif dataset == "SUN":
+        class_names_file = f"data/txt_lists/SUN/class_names.txt"
         with open(class_names_file, "r") as f:
             names = f.readlines()
         known_class_names = [name.strip() for name in names]

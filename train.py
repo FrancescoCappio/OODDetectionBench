@@ -22,7 +22,7 @@ def get_args():
     parser.add_argument("--dataset", default="ImageNet", help="Dataset name",
                         choices=['DTD', 'DomainNet_Real', 'DomainNet_Painting', 'DomainNet_Sketch', 'Places', 
                                  'PACS_DG', 'PACS_SS_DG', 'imagenet_ood', 'imagenet_ood_small', 'DomainNet_DG',
-                                 'MCM_benchmarks'])
+                                 'MCM_benchmarks', 'DomainNet_OOD', 'PatternNet', 'SUN'])
     parser.add_argument("--source",
                         help="PACS_DG: no_ArtPainting, no_Cartoon, no_Photo, no_Sketch | PACS_SS_DG: Source")
     parser.add_argument("--target",
@@ -267,7 +267,7 @@ class Trainer:
             metrics = MCM_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
                                                     device=self.device, model=self.model, clip_model=self.clip_model, known_class_names=self.known_class_names)
 
-        if self.args.evaluator == "resend":
+        elif self.args.evaluator == "resend":
             metrics = resend_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
 
