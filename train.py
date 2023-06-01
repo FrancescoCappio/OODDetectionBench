@@ -29,11 +29,11 @@ def get_args():
                         help="PACS_DG: ArtPainting, Cartoon, Photo, Sketch | PACS_SS_DG: ArtPainting, Cartoon, Photo")
 
     # model parameters
-    parser.add_argument("--network", type=str, default="resnet101", choices=["resnet101", "vit"])
-    parser.add_argument("--model", type=str, default="CE", choices=["CE", "simclr", "supclr", "cutmix", "CSI", "supCSI", "clip", "DINO"])
+    parser.add_argument("--network", type=str, default="resnet101", choices=["resnet101", "vit", "resend"])
+    parser.add_argument("--model", type=str, default="CE", choices=["CE", "simclr", "supclr", "cutmix", "CSI", "supCSI", "clip", "DINO", "resend"])
     parser.add_argument("--evaluator", type=str, help="Strategy to compute normality scores", default="prototypes_distance",
                         choices=["prototypes_distance", "MSP", "ODIN", "energy", "gradnorm", "mahalanobis", "gram", "knn_distance",
-                                 "linear_probe", "MCM", "knn_ood"])
+                                 "linear_probe", "MCM", "knn_ood", "resend"])
 
     # evaluators-specific parameters 
     parser.add_argument("--NNK", help="K value to use for Knn distance evaluator", type=int, default=1)
@@ -174,6 +174,14 @@ class Trainer:
 
             else:
                 raise NotImplementedError(f"Model {self.args.model} is not supported with network {self.args.network}")
+
+        elif self.args.network == "resend":
+            assert self.args.only_eval and ckpt is not None, "Cannot perform eval without a pretrained model"
+
+            from models.resend import ReSeND
+
+            self.model = ReSeND()
+            self.output_num = self.model.output_num
         else:
             raise NotImplementedError(f"Network {self.args.network} not implemented")
 
@@ -258,6 +266,10 @@ class Trainer:
             assert self.args.model == "clip", "MCM evaluator supports only clip based models!"
             metrics = MCM_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
                                                     device=self.device, model=self.model, clip_model=self.clip_model, known_class_names=self.known_class_names)
+
+        if self.args.evaluator == "resend":
+            metrics = resend_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
+                                                    device=self.device, model=self.model)
 
         else:
             raise NotImplementedError(f"Unknown evaluator {self.args.evaluator}")
