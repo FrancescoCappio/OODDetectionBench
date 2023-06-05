@@ -22,7 +22,7 @@ def get_args():
     parser.add_argument("--dataset", default="ImageNet", help="Dataset name",
                         choices=['DTD', 'DomainNet_Real', 'DomainNet_Painting', 'DomainNet_Sketch', 'Places', 
                                  'PACS_DG', 'PACS_SS_DG', 'imagenet_ood', 'imagenet_ood_small', 'DomainNet_DG',
-                                 'MCM_benchmarks', 'DomainNet_OOD', 'PatternNet', 'SUN'])
+                                 'MCM_benchmarks', 'DomainNet_OOD', 'PatternNet', 'SUN', 'DomainNet_All'])
     parser.add_argument("--source",
                         help="PACS_DG: no_ArtPainting, no_Cartoon, no_Photo, no_Sketch | PACS_SS_DG: Source")
     parser.add_argument("--target",
@@ -159,7 +159,7 @@ class Trainer:
                     self.model = model
 
             elif self.args.model == "clip":
-                # ViT-L/14
+                # ViT-B/16
                 import clip 
 
                 model, preprocess = clip.load("ViT-B/16", self.device)
@@ -169,7 +169,7 @@ class Trainer:
                 self.clip_model = model
                 # the model has no fc by default, so it does not support closed set finetuning
                 from models.common import WrapperWithFC
-                self.output_num = 768
+                self.output_num = 512
                 self.model = WrapperWithFC(model.visual, self.output_num, self.n_known_classes, half_precision=True)
 
             else:
