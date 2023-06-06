@@ -62,3 +62,9 @@ python train.py --dataset "$dataset" --source "$src_domain" --target "$tgt_domai
 
 echo "ViT-B CLIP MCM"
 python train.py --dataset "$dataset" --source "$src_domain" --target "$tgt_domain" --network vit --model clip --only_eval --evaluator MCM
+
+echo "Vit-B DINOv2 KNN"
+python train.py --dataset "$dataset" --source "$src_domain" --target "$tgt_domain" --network vit --model DINOv2 --only_eval --evaluator knn_distance
+
+echo "Vit-B DINOv2 prototypes"
+python train.py --dataset "$dataset" --source "$src_domain" --target "$tgt_domain" --network vit --model DINOv2 --only_eval --evaluator prototypes_distance

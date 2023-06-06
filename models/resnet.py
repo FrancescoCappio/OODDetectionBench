@@ -9,7 +9,7 @@ def get_resnet(network, ckpt=None, n_known_classes=1000):
     if network != "resnet101":
         raise NotImplementedError(f"Unknown network {network}")
 
-    model = models.resnet101(pretrained=True)
+    model = models.resnet101(weights=models.ResNet101_Weights.IMAGENET1K_V1)
     
     if ckpt is not None:
         model.load_state_dict(ckpt, strict=True)

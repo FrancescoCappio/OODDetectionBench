@@ -30,7 +30,7 @@ def get_args():
 
     # model parameters
     parser.add_argument("--network", type=str, default="resnet101", choices=["resnet101", "vit", "resend"])
-    parser.add_argument("--model", type=str, default="CE", choices=["CE", "simclr", "supclr", "cutmix", "CSI", "supCSI", "clip", "DINO", "resend"])
+    parser.add_argument("--model", type=str, default="CE", choices=["CE", "simclr", "supclr", "cutmix", "CSI", "supCSI", "clip", "DINO", "resend", "DINOv2"])
     parser.add_argument("--evaluator", type=str, help="Strategy to compute normality scores", default="prototypes_distance",
                         choices=["prototypes_distance", "MSP", "ODIN", "energy", "gradnorm", "mahalanobis", "gram", "knn_distance",
                                  "linear_probe", "MCM", "knn_ood", "resend"])
@@ -172,6 +172,11 @@ class Trainer:
                 self.output_num = 512
                 self.model = WrapperWithFC(model.visual, self.output_num, self.n_known_classes, half_precision=True)
 
+            elif self.args.model == "DINOv2":
+                dinov2_vitb14 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14')
+                from models.common import WrapperWithFC
+                self.output_num = 768
+                self.model = WrapperWithFC(dinov2_vitb14, self.output_num, self.n_known_classes)
             else:
                 raise NotImplementedError(f"Model {self.args.model} is not supported with network {self.args.network}")
 
