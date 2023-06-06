@@ -27,13 +27,14 @@ def MCM_evaluator(train_loader, test_loader, model, clip_model, device, known_cl
     text_inputs = torch.cat([clip.tokenize(f"a photo of a {c}.") for c in known_class_names]).to(device)
     
     concept_prototypes = clip_model.to(device).encode_text(text_inputs)
-    concept_prototypes = normalize_feats(concept_prototypes).cpu()
+    concept_prototypes = normalize_feats(concept_prototypes)
+    test_feats = test_feats.to(device)
 
     # compute the cos sim
     cos_sim_logits = torch.matmul(test_feats, concept_prototypes.T)
 
     # apply softmax with temperature
-    probs = cos_sim_logits.type(torch.float).softmax(dim=-1)
+    probs = cos_sim_logits.type(torch.float).softmax(dim=-1).cpu()
 
     max_pred_prob, pred_cls = probs.max(dim=1)
 

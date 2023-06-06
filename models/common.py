@@ -81,17 +81,22 @@ class WrapperWithContrastiveHead(nn.Module):
     """
     Wrap a base model composed of a Backbone + fc (cls head) adding a parallel contrastive head 
     """
-    def __init__(self, base_model, out_dim, contrastive_type="simclr"):
+    def __init__(self, base_model, out_dim, contrastive_type="simclr", add_cls_head=False, n_classes=100):
         """
         Arguments:
             base_model (nn.Module)
             out_dim (int): output size of the base model (feats)
             contrastive_type (str): type of contrastive head: simclr (for simclr/supclr), CSI (for CSI/supCSI), DINO
+            add_cls_head (bool): add also a classification head?
+            n_classes (int): output_num for classification
         """
         super().__init__()
-        self.base_model = base_model
         assert contrastive_type in ["simclr", "CSI", "DINO"], f"Unknown contrastive head type {contrastive_type}"
+        self.base_model = base_model
+        self.add_cls_head = add_cls_head
 
+        if self.add_cls_head:
+            self.fc = nn.Linear(in_features=out_dim, out_features=n_classes)
         if contrastive_type == "simclr":
             self.contrastive_head = SimCLRContrastiveHead(channels_in=out_dim)
         elif contrastive_type == "CSI":
@@ -100,7 +105,11 @@ class WrapperWithContrastiveHead(nn.Module):
             self.contrastive_head = DINOHead(in_dim=out_dim, out_dim=65536)
 
     def forward(self, x, contrastive=False): 
-        logits, feats = self.base_model(x)
+        if self.add_cls_head:
+            feats = self.base_model(x)
+            logits = self.fc(feats)
+        else:
+            logits, feats = self.base_model(x)
         if contrastive:
             return logits, self.contrastive_head(feats)
         return logits, feats

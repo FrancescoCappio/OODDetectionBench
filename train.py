@@ -29,8 +29,10 @@ def get_args():
                         help="PACS_DG: ArtPainting, Cartoon, Photo, Sketch | PACS_SS_DG: ArtPainting, Cartoon, Photo")
 
     # model parameters
-    parser.add_argument("--network", type=str, default="resnet101", choices=["resnet101", "vit", "resend"])
-    parser.add_argument("--model", type=str, default="CE", choices=["CE", "simclr", "supclr", "cutmix", "CSI", "supCSI", "clip", "DINO", "resend", "DINOv2"])
+    parser.add_argument("--network", type=str, default="resnet101", choices=["resnet101", "vit", "resend", 
+                                                                             "resnetv2_101x3"])
+    parser.add_argument("--model", type=str, default="CE", choices=["CE", "simclr", "supclr", "cutmix", "CSI", "supCSI", "clip", "DINO", 
+                                                                    "resend", "DINOv2", "BiT"])
     parser.add_argument("--evaluator", type=str, help="Strategy to compute normality scores", default="prototypes_distance",
                         choices=["prototypes_distance", "MSP", "ODIN", "energy", "gradnorm", "mahalanobis", "gram", "knn_distance",
                                  "linear_probe", "MCM", "knn_ood", "resend"])
@@ -124,6 +126,7 @@ class Trainer:
 
                 model, preprocess = clip.load("RN101", self.device)
                 self.clip_preprocessor = preprocess
+                import ipdb; ipdb.set_trace() 
                 # substitute preprocess with CLIP's one
                 self.substitute_val_preprocessor(preprocess)
                 self.clip_model = model
@@ -139,33 +142,25 @@ class Trainer:
             if self.args.model in ["CE", "DINO"]:
 
                 import timm
-                import types
-                model = timm.create_model("deit_base_patch16_224",pretrained=True)
-
-                def my_forward(self, x):
-                    net_feats = self.forward_features(x)
-                    feats = self.forward_head(net_feats,pre_logits=True)
-                    x = self.forward_head(net_feats)
-                    return x, feats
-
-                model.forward = types.MethodType(my_forward, model)
+                # we set num_classes to 0 in order to obtain pooled feats
+                model = timm.create_model("deit_base_patch16_224", pretrained=True, num_classes=0)
                 self.output_num = 768
 
                 if self.args.model == "DINO":
                     self.contrastive_enabled = not args.disable_contrastive_head
                     from models.common import WrapperWithContrastiveHead
-                    self.model = WrapperWithContrastiveHead(model, out_dim=self.output_num, contrastive_type="DINO")
+                    self.model = WrapperWithContrastiveHead(model, out_dim=self.output_num, contrastive_type="DINO", 
+                                                            add_cls_head=True, n_classes=self.n_known_classes)
                 else:
-                    self.model = model
+                    from models.common import WrapperWithFC
+                    model = WrapperWithFC(model, self.output_num, self.n_known_classes)
+                    self.model = model 
 
             elif self.args.model == "clip":
                 # ViT-B/16
                 import clip 
 
                 model, preprocess = clip.load("ViT-B/16", self.device)
-                self.clip_preprocessor = preprocess
-                # substitute preprocess with CLIP's one
-                self.substitute_val_preprocessor(preprocess)
                 self.clip_model = model
                 # the model has no fc by default, so it does not support closed set finetuning
                 from models.common import WrapperWithFC
@@ -179,6 +174,18 @@ class Trainer:
                 self.model = WrapperWithFC(dinov2_vitb14, self.output_num, self.n_known_classes)
             else:
                 raise NotImplementedError(f"Model {self.args.model} is not supported with network {self.args.network}")
+        
+        elif self.args.network == "resnetv2_101x3":
+            assert self.args.model == "BiT", f"The network {self.args.network} supports only BiT model"
+
+            # we set num_classes to 0 in order to obtain pooled feats
+            import timm 
+            from models.common import WrapperWithFC
+            # https://huggingface.co/timm/resnetv2_101x3_bit.goog_in21k
+            model = timm.create_model('resnetv2_101x3_bit.goog_in21k', pretrained=True, num_classes=0)
+            self.output_num = 6144
+
+            self.model = WrapperWithFC(model, self.output_num, self.n_known_classes)
 
         elif self.args.network == "resend":
             assert self.args.only_eval and ckpt is not None, "Cannot perform eval without a pretrained model"
@@ -198,14 +205,6 @@ class Trainer:
         self.to_device(self.device)
 
         print("Number of parameters: ", count_parameters(self.model))
-
-    def substitute_val_preprocessor(self, preprocess):
-        self.target_loader.dataset._image_transformer = preprocess
-        if hasattr(self, "source_loader_val"):
-            self.source_loader_test.dataset.dataset._image_transformer = preprocess
-            self.source_loader_val.dataset.dataset._image_transformer = preprocess
-        else:
-            self.source_loader_test.dataset._image_transformer = preprocess
 
     def to_device(self, device):
         self.model = self.model.to(device)
@@ -289,10 +288,6 @@ class Trainer:
         
         train_loader = get_train_dataloader(self.args)
         check_data_consistency(train_loader, self.source_loader_test)
-
-        if self.args.model == "clip":
-            # clip needs its own preprocessing pipeline
-            train_loader.dataset._image_transformer = self.clip_preprocessor
 
         if self.args.evaluator == "gram":
             # this method needs a split of source data to be used as validation set 

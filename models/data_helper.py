@@ -6,8 +6,11 @@ from PIL import Image
 import numpy as np
 
 PATH_TO_TXT = 'data/txt_lists'
-IMAGENET_PIXEL_MEAN = [0.485, 0.456, 0.406]
-IMAGENET_PIXEL_STD = [0.229, 0.224, 0.225]
+NORMALIZE_STATS = {
+        "ImageNet1k": {"mean":(0.485, 0.456, 0.406), "std":(0.229, 0.224, 0.225)},
+        "CLIP": {"mean":(0.48145466, 0.4578275, 0.40821073), "std":(0.26862954, 0.26130258, 0.27577711)},
+        "BiT": {"mean":(0.5,0.5,0.5), "std":(0.5,0.5,0.5)},
+        }
 NUM_WORKERS = 4
 
 def few_shot_subsample(names, labels, n_shots=5, seed=42):
@@ -165,9 +168,16 @@ def split_train_loader(train_loader, seed):
 
 
 def get_val_transformer(args):
+    mode = "ImageNet1k"
+    if args.model == "BiT":
+        mode = "BiT"
+    elif args.model == "clip":
+        mode = "CLIP"
+
+    norm_stats = NORMALIZE_STATS[mode]
 
     img_tr = [transforms.Resize((args.image_size, args.image_size)), transforms.ToTensor(),
-              transforms.Normalize(IMAGENET_PIXEL_MEAN, std=IMAGENET_PIXEL_STD)]
+              transforms.Normalize(norm_stats["mean"], std=norm_stats["std"])]
 
     return transforms.Compose(img_tr)
 
@@ -179,6 +189,12 @@ def get_train_transformer(args):
     random_horiz_flip = 0.5
     jitter = 0.4
     random_grayscale = 0.1
+    mode = "ImageNet1k"
+    if args.model == "BiT":
+        mode = "BiT"
+    elif args.model == "clip":
+        mode = "CLIP"
+    norm_stats = NORMALIZE_STATS[mode]
 
     img_tr = []
 
@@ -191,7 +207,8 @@ def get_train_transformer(args):
     if random_grayscale:
         img_tr.append(transforms.RandomGrayscale(random_grayscale))
 
-    img_tr = img_tr + [transforms.ToTensor(), transforms.Normalize(IMAGENET_PIXEL_MEAN, std=IMAGENET_PIXEL_STD)]
+    img_tr = img_tr + [transforms.ToTensor(), 
+                        transforms.Normalize(norm_stats["mean"], std=norm_stats["std"])]
 
     return transforms.Compose(img_tr)
 
