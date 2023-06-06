@@ -119,18 +119,20 @@ class WrapperWithFC(nn.Module):
     """
     Wrap a base model adding a final fc on top of it
     """
-    def __init__(self, base_model, out_dim, n_classes, half_precision=False):
+    def __init__(self, base_model, out_dim, n_classes, half_precision=False, base_output_map=None):
         """
         Arguments: 
             base_model (nn.Module)
             out_dim (int): output size of the base model 
             n_classes (int): output_size of the wrapper
             half_precision (bool): use half precision for fc
+            base_output_map (fn): extract feats from base model output
         """
         super().__init__()
         self.base_model = base_model 
         self.fc = nn.Linear(in_features=out_dim, out_features=n_classes)
         self.half_precision = half_precision
+        self.base_output_map = base_output_map
         if half_precision:
             self.fc = self.fc.half()
 
@@ -138,4 +140,6 @@ class WrapperWithFC(nn.Module):
         if self.half_precision:
             x = x.half()
         feats = self.base_model(x)
+        if self.base_output_map:
+            feats = self.base_output_map(feats)
         return self.fc(feats), feats

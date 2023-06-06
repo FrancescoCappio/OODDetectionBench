@@ -13,6 +13,16 @@ NORMALIZE_STATS = {
         }
 NUM_WORKERS = 4
 
+def get_norm_stats(args): 
+    mode = "ImageNet1k"
+    if args.model == "BiT" or args.model == "CE-IM22k":
+        mode = "BiT"
+    elif args.model == "clip":
+        mode = "CLIP"
+
+    print(f"Using normalization stats from {mode}")
+    return NORMALIZE_STATS[mode]
+
 def few_shot_subsample(names, labels, n_shots=5, seed=42):
     # randomly select n_shots samples for each class 
     np_labels = np.array(labels)
@@ -168,13 +178,8 @@ def split_train_loader(train_loader, seed):
 
 
 def get_val_transformer(args):
-    mode = "ImageNet1k"
-    if args.model == "BiT":
-        mode = "BiT"
-    elif args.model == "clip":
-        mode = "CLIP"
 
-    norm_stats = NORMALIZE_STATS[mode]
+    norm_stats = get_norm_stats(args)
 
     img_tr = [transforms.Resize((args.image_size, args.image_size)), transforms.ToTensor(),
               transforms.Normalize(norm_stats["mean"], std=norm_stats["std"])]
@@ -189,12 +194,7 @@ def get_train_transformer(args):
     random_horiz_flip = 0.5
     jitter = 0.4
     random_grayscale = 0.1
-    mode = "ImageNet1k"
-    if args.model == "BiT":
-        mode = "BiT"
-    elif args.model == "clip":
-        mode = "CLIP"
-    norm_stats = NORMALIZE_STATS[mode]
+    norm_stats = get_norm_stats(args)
 
     img_tr = []
 

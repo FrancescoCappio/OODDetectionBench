@@ -32,7 +32,7 @@ def get_args():
     parser.add_argument("--network", type=str, default="resnet101", choices=["resnet101", "vit", "resend", 
                                                                              "resnetv2_101x3"])
     parser.add_argument("--model", type=str, default="CE", choices=["CE", "simclr", "supclr", "cutmix", "CSI", "supCSI", "clip", "DINO", 
-                                                                    "resend", "DINOv2", "BiT"])
+                                                                    "resend", "DINOv2", "BiT", "CE-IM22k"])
     parser.add_argument("--evaluator", type=str, help="Strategy to compute normality scores", default="prototypes_distance",
                         choices=["prototypes_distance", "MSP", "ODIN", "energy", "gradnorm", "mahalanobis", "gram", "knn_distance",
                                  "linear_probe", "MCM", "knn_ood", "resend"])
@@ -174,6 +174,14 @@ class Trainer:
                 from models.common import WrapperWithFC
                 self.output_num = 1024
                 self.model = WrapperWithFC(dinov2_vitb14, self.output_num, self.n_known_classes)
+
+            elif self.args.model == "CE-IM22k":
+                # https://huggingface.co/google/vit-large-patch16-224-in21k
+                from transformers import ViTModel
+                model = ViTModel.from_pretrained('google/vit-large-patch16-224-in21k')
+                self.output_num = 1024
+                from models.common import WrapperWithFC
+                self.model = WrapperWithFC(model, self.output_num, self.n_known_classes, base_output_map=lambda x: x["pooler_output"])
             else:
                 raise NotImplementedError(f"Model {self.args.model} is not supported with network {self.args.network}")
         
