@@ -147,6 +147,8 @@ class Trainer:
                 self.output_num = 768
 
                 if self.args.model == "DINO":
+                    # if we didn't need the contrastive head we could use the model from huggingface:
+                    # https://huggingface.co/facebook/dino-vitb16
                     self.contrastive_enabled = not args.disable_contrastive_head
                     from models.common import WrapperWithContrastiveHead
                     self.model = WrapperWithContrastiveHead(model, out_dim=self.output_num, contrastive_type="DINO", 
@@ -160,17 +162,17 @@ class Trainer:
                 # ViT-B/16
                 import clip 
 
-                model, preprocess = clip.load("ViT-B/16", self.device)
+                model, preprocess = clip.load("ViT-L/14", self.device)
                 self.clip_model = model
                 # the model has no fc by default, so it does not support closed set finetuning
                 from models.common import WrapperWithFC
-                self.output_num = 512
+                self.output_num = 768
                 self.model = WrapperWithFC(model.visual, self.output_num, self.n_known_classes, half_precision=True)
 
             elif self.args.model == "DINOv2":
-                dinov2_vitb14 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14')
+                dinov2_vitb14 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14')
                 from models.common import WrapperWithFC
-                self.output_num = 768
+                self.output_num = 1024
                 self.model = WrapperWithFC(dinov2_vitb14, self.output_num, self.n_known_classes)
             else:
                 raise NotImplementedError(f"Model {self.args.model} is not supported with network {self.args.network}")
