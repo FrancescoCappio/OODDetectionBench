@@ -21,8 +21,8 @@ def get_args():
 
     parser.add_argument("--dataset", default="ImageNet", help="Dataset name",
                         choices=['DTD', 'DomainNet_Real', 'DomainNet_Painting', 'DomainNet_Sketch', 'Places', 
-                                 'PACS_DG', 'PACS_SS_DG', 'imagenet_ood', 'imagenet_ood_small', 'DomainNet_DG',
-                                 'MCM_benchmarks', 'DomainNet_OOD', 'PatternNet', 'SUN', 'DomainNet_All'])
+                                 'PACS_DG', 'PACS_SS_DG', 'imagenet_ood', 'imagenet_ood_small', 'DomainNet_DGv2',
+                                 'MCM_benchmarks', 'PatternNet', 'SUN'])
     parser.add_argument("--source",
                         help="PACS_DG: no_ArtPainting, no_Cartoon, no_Photo, no_Sketch | PACS_SS_DG: Source")
     parser.add_argument("--target",
