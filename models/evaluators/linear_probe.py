@@ -1,7 +1,7 @@
 import torch 
 from sklearn.linear_model import LogisticRegression
 import numpy as np
-from models.evaluators.common import prepare_ood_labels, calc_ood_metrics, run_model
+from models.evaluators.common import prepare_ood_labels, calc_ood_metrics, run_model, closed_set_accuracy
 
 @torch.no_grad()
 def linear_probe_evaluator(train_loader, test_loader, device, model, contrastive_head=False): 
@@ -25,9 +25,15 @@ def linear_probe_evaluator(train_loader, test_loader, device, model, contrastive
     known_labels = torch.unique(train_lbls)
     ood_labels = prepare_ood_labels(known_labels, test_lbls)
 
+    # closed set predictions
+    cs_preds = np.argmax(pred_prob, axis=1)
+    known_mask = ood_labels == 1
+    cs_acc = closed_set_accuracy(cs_preds[known_mask], test_lbls[known_mask])
+
     print(f"Num known: {ood_labels.sum()}. Num unknown: {len(test_lbls) - ood_labels.sum()}.")
 
     metrics = calc_ood_metrics(max_pred_prob, ood_labels)
+    metrics["cs_acc"] = cs_acc
 
     return metrics 
 

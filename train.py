@@ -1,10 +1,11 @@
 import argparse
 from os.path import join
-from numpy import test
 
 import torch
 from torch import nn, optim
 import os
+import sys
+from models.evaluators.common import run_model, prepare_ood_labels, closed_set_accuracy
 
 from models.resnet import get_resnet
 from models.data_helper import get_eval_dataloader, get_train_dataloader, split_train_loader, check_data_consistency
@@ -22,7 +23,7 @@ def get_args():
     parser.add_argument("--dataset", default="ImageNet", help="Dataset name",
                         choices=['DTD', 'DomainNet_Real', 'DomainNet_Painting', 'DomainNet_Sketch', 'Places', 
                                  'PACS_DG', 'PACS_SS_DG', 'imagenet_ood', 'imagenet_ood_small', 'DomainNet_DGv2',
-                                 'MCM_benchmarks', 'PatternNet', 'SUN'])
+                                 'MCM_benchmarks', 'PatternNet', 'SUN', 'ImageNet1k'])
     parser.add_argument("--source",
                         help="PACS_DG: no_ArtPainting, no_Cartoon, no_Photo, no_Sketch | PACS_SS_DG: Source")
     parser.add_argument("--target",
@@ -32,7 +33,7 @@ def get_args():
     parser.add_argument("--network", type=str, default="resnet101", choices=["resnet101", "vit", "resend", 
                                                                              "resnetv2_101x3"])
     parser.add_argument("--model", type=str, default="CE", choices=["CE", "simclr", "supclr", "cutmix", "CSI", "supCSI", "clip", "DINO", 
-                                                                    "resend", "DINOv2", "BiT", "CE-IM22k"])
+                                                                    "resend", "DINOv2", "BiT", "CE-IM22k", "random_init"])
     parser.add_argument("--evaluator", type=str, help="Strategy to compute normality scores", default="prototypes_distance",
                         choices=["prototypes_distance", "MSP", "ODIN", "energy", "gradnorm", "mahalanobis", "gram", "knn_distance",
                                  "linear_probe", "MCM", "knn_ood", "resend"])
@@ -50,6 +51,7 @@ def get_args():
     # finetuning params 
     parser.add_argument("--iterations", type=int, default=100, help="Number of finetuning iterations")
     parser.add_argument("--learning_rate", type=float, default=0.003, help="Learning rate (fixed) for finetuning")
+    parser.add_argument("--freeze_backbone", action="store_true", default=False, help="Train only cls head during finetuning")
 
     # run params 
     parser.add_argument("--seed", type=int, default=42, help="Random seed for data splitting")
@@ -99,9 +101,11 @@ class Trainer:
                 # if ckpt fc size does not match current size discard it
                 if ckpt is not None: 
                     old_size = ckpt["fc.bias"].shape
-                    if not old_size == self.n_known_classes:
+                    if not old_size[0] == self.n_known_classes:
                         del ckpt["fc.weight"]
                         del ckpt["fc.bias"]
+            elif self.args.model == "random_init":
+                self.model, self.output_num = get_resnet(self.args.network, n_known_classes=self.n_known_classes, random_init=True)
 
             elif self.args.model in ["simclr", "supclr", "CSI", "supCSI"]:
                 self.contrastive_enabled = not args.disable_contrastive_head
@@ -126,7 +130,6 @@ class Trainer:
 
                 model, preprocess = clip.load("RN101", self.device)
                 self.clip_preprocessor = preprocess
-                import ipdb; ipdb.set_trace() 
                 # substitute preprocess with CLIP's one
                 self.substitute_val_preprocessor(preprocess)
                 self.clip_model = model
@@ -288,7 +291,9 @@ class Trainer:
         else:
             raise NotImplementedError(f"Unknown evaluator {self.args.evaluator}")
 
-        
+        if "cs_acc" in metrics:
+            print(f"Closed set accuracy: {metrics['cs_acc']:.4f}")
+
         auroc = metrics["auroc"]
         fpr_auroc = metrics["fpr_at_95_tpr"]
         print(f"Auroc,FPR95: {auroc:.4f},{fpr_auroc:.4f}")
@@ -297,16 +302,26 @@ class Trainer:
         # prepare data 
         
         train_loader = get_train_dataloader(self.args)
-        check_data_consistency(train_loader, self.source_loader_test)
 
         if self.args.evaluator == "gram":
             # this method needs a split of source data to be used as validation set 
             train_loader, _ = split_train_loader(train_loader, self.args.seed)
 
+        check_data_consistency(train_loader, self.source_loader_test)
+
         self.to_train()
 
         # prepare optimizer 
-        optimizer = optim.SGD(self.model.parameters(), weight_decay=.0005, momentum=.9, lr=self.args.learning_rate)
+        optim_params = self.model.parameters()
+        if self.args.freeze_backbone:
+            if hasattr(self.model, "fc"):
+                optim_params = self.model.fc.parameters()
+            elif hasattr(self.model, "base_model") and hasattr(self.model.base_model, "fc"):
+                optim_params = self.model.base_model.fc.parameters()
+            else:
+                raise NotImplementedError("Don't know how to access fc")
+
+        optimizer = optim.SGD(optim_params, weight_decay=.0005, momentum=.9, lr=self.args.learning_rate)
         # loss function 
         loss_fn = nn.CrossEntropyLoss()
 
@@ -324,9 +339,10 @@ class Trainer:
 
             images, labels = batch 
             images = images.to(self.device)
+            labels = labels.to(self.device)
             outputs, feats = self.model(images)
 
-            loss = loss_fn(outputs, labels.to(self.device))
+            loss = loss_fn(outputs, labels)
 
             optimizer.zero_grad()
             loss.backward()
@@ -334,7 +350,9 @@ class Trainer:
 
             avg_loss += loss.item()
             if (it+1) % log_period == 0:
-                print(f"Iterations: {it+1:6d}/{self.args.iterations}\t Loss: {avg_loss / log_period:6.4f}")
+                _,preds = outputs.max(dim=1)
+                train_acc = ((preds == labels).sum()/len(preds)).cpu().item()
+                print(f"Iterations: {it+1:6d}/{self.args.iterations}\t Loss: {avg_loss / log_period:6.4f} \t Acc: {train_acc:6.4f}")
                 avg_loss = 0
 
         # save final checkpoint 
@@ -342,6 +360,23 @@ class Trainer:
             os.makedirs(self.args.output_dir)
             torch.save(self.model.state_dict(), join(self.args.output_dir,"model_last.pth"))
 
+    @torch.no_grad()
+    def do_periodic_eval(self):
+        self.to_eval()
+        correct = 0
+        count = 0
+        for batch in self.target_loader:
+            images, labels = batch 
+            images = images.to(self.device)
+            outputs, _ = self.model(images)
+            _, preds = outputs.max(dim=1)
+            mask = labels < self.n_known_classes
+            correct += (preds[mask].cpu() == labels[mask]).sum()
+            count += len(labels[mask])
+
+        print(f"Test acc {correct/count:.4f}")
+
+        self.to_train()
 
 def main():
     args = get_args()

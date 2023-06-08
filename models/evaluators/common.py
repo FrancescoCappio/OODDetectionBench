@@ -1,6 +1,7 @@
 import torch 
-from ood_metrics import calc_metrics as calc_ood_metrics
+from ood_metrics import calc_metrics
 from tqdm import tqdm 
+import numpy as np
 
 def prepare_ood_labels(known_labels, test_labels):
     # 0 means OOD
@@ -30,3 +31,27 @@ def run_model(model, loader, device, contrastive=False):
 
     return  torch.cat(logits_list), torch.cat(feats_list), torch.cat(gt_list)
 
+def calc_ood_metrics(test_normality_scores, ood_labels):
+    num_known = (ood_labels == 1).sum()
+
+    if num_known == len(test_normality_scores):
+        print("This dataset contains only known data")
+        return {"auroc": -1, "fpr_at_95_tpr": -1}
+
+    return calc_metrics(test_normality_scores, ood_labels)
+
+def closed_set_accuracy(closed_set_preds, closed_set_lbls):
+
+    assert len(closed_set_preds) == len(closed_set_lbls), "Numbers of closed set predictions and labels do not match"
+
+    if not isinstance(closed_set_preds, np.ndarray):
+        closed_set_preds = closed_set_preds.cpu().numpy()
+    if not isinstance(closed_set_lbls, np.ndarray):
+        closed_set_lbls = closed_set_lbls.cpu().numpy()
+
+    correct = (closed_set_preds == closed_set_lbls).sum()
+
+    acc = correct/len(closed_set_lbls)
+    print(f"Closed set accuracy: {acc:.4f}")
+
+    return acc

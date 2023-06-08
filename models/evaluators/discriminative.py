@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from tqdm import tqdm
-from models.evaluators.common import run_model, prepare_ood_labels, calc_ood_metrics
+from models.evaluators.common import run_model, prepare_ood_labels, calc_ood_metrics, closed_set_accuracy
 
 @torch.no_grad()
 def MSP_evaluator(train_loader, test_loader, device, model): 
@@ -15,10 +15,15 @@ def MSP_evaluator(train_loader, test_loader, device, model):
     known_labels = torch.unique(torch.tensor(train_lbls))
     ood_labels = prepare_ood_labels(known_labels, test_lbls)
 
+    # closed set predictions
+    normality_scores, cs_preds = test_logits.max(dim=1)
+    known_mask = ood_labels == 1
+    cs_acc = closed_set_accuracy(cs_preds[known_mask], test_lbls[known_mask])
+
     print(f"Num known: {ood_labels.sum()}. Num unknown: {len(test_lbls) - ood_labels.sum()}.")
 
-    normality_scores, _ = test_logits.max(dim=1)
     metrics = calc_ood_metrics(normality_scores, ood_labels)
+    metrics["cs_acc"] = cs_acc
 
     return metrics 
 

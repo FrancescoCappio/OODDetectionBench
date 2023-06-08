@@ -24,6 +24,7 @@ def get_norm_stats(args):
     return NORMALIZE_STATS[mode]
 
 def few_shot_subsample(names, labels, n_shots=5, seed=42):
+    print("Applying few shot subsample")
     # randomly select n_shots samples for each class 
     np_labels = np.array(labels)
     np_names = np.array(names)
@@ -182,7 +183,7 @@ def get_val_transformer(args):
     norm_stats = get_norm_stats(args)
 
     img_tr = [transforms.Resize((args.image_size, args.image_size)), transforms.ToTensor(),
-              transforms.Normalize(norm_stats["mean"], std=norm_stats["std"])]
+              transforms.Normalize(mean=norm_stats["mean"], std=norm_stats["std"])]
 
     return transforms.Compose(img_tr)
 
@@ -215,8 +216,8 @@ def get_train_transformer(args):
 def check_data_consistency(train_loader, inference_train_loader):
     # we need to be sure that data used for training and later used as support set at inference time really match 
 
-    train_names = train_loader.dataset.names 
-    inf_names = inference_train_loader.dataset.names 
+    train_names = train_loader.dataset.names.copy()
+    inf_names = inference_train_loader.dataset.names.copy()
 
     train_names.sort()
     inf_names.sort()

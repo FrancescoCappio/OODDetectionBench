@@ -4,12 +4,15 @@ from torchvision import models
 import types
 
 
-def get_resnet(network, ckpt=None, n_known_classes=1000):
+def get_resnet(network, ckpt=None, n_known_classes=1000, random_init=False):
 
     if network != "resnet101":
         raise NotImplementedError(f"Unknown network {network}")
 
-    model = models.resnet101(weights=models.ResNet101_Weights.IMAGENET1K_V1)
+    if random_init: 
+        model = models.resnet101()
+    else:
+        model = models.resnet101(weights=models.ResNet101_Weights.IMAGENET1K_V1)
     
     if ckpt is not None:
         model.load_state_dict(ckpt, strict=True)
