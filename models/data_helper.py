@@ -96,28 +96,43 @@ def get_eval_dataloader(args):
     dataset = args.dataset
     target = "out_distribution" if args.target is None else args.target
     source = "in_distribution" if args.source is None else args.source
+
+    if not args.data_order == -1:
+        source = source + f"_o{args.data_order}"
+        target = target + f"_o{args.data_order}"
     print(f"Dataset {dataset}, train_data: {source}, test_data: {target}")
 
     train_dataset_txt_path = join(PATH_TO_TXT, dataset, source + '.txt')
     names_sources, labels_sources = _dataset_info_standard(train_dataset_txt_path)
+
+    n_known_classes = len(set(labels_sources))
     # apply few shot subsampling if necessary
     if args.few_shot > 0: 
         names_sources, labels_sources = few_shot_subsample(names_sources, labels_sources, n_shots=args.few_shot, seed=args.seed)
 
     if dataset == "MCM_benchmarks" and source in ["Stanford-Cars", "CUB-200", "Oxford-Pet"]:
         class_names_file = f"data/txt_lists/MCM_benchmarks/{source}_names.txt"
+        print(f"Reading class names from: {class_names_file}")
 
         with open(class_names_file, "r") as f:
             names = f.readlines()
         known_class_names = [name.strip() for name in names]
-    elif dataset == "SUN":
-        class_names_file = f"data/txt_lists/SUN/class_names.txt"
-        with open(class_names_file, "r") as f:
+    elif dataset in ["SUN", "Stanford_Cars"]:
+        class_names_file = "class_names"
+        if not args.data_order == -1:
+            class_names_file = class_names_file + f"_o{args.data_order}"
+
+        class_names_path = join(PATH_TO_TXT, dataset, class_names_file + '.txt')
+        print(f"Reading class names from: {class_names_path}")
+        with open(class_names_path, "r") as f:
             names = f.readlines()
         known_class_names = [name.strip() for name in names]
     else: 
+        print("Attempt to extract class names from file paths")
         known_class_names = _get_known_class_names(names_sources, labels_sources)
-    n_known_classes = len(known_class_names)
+
+    known_class_names = known_class_names[:n_known_classes]
+    print(f"Number of known_classes: {n_known_classes}")
     img_tr = get_val_transformer(args)
     train_dataset = Dataset(names_sources, labels_sources, args.path_dataset, img_transformer=img_tr)
 
