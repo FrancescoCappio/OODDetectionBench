@@ -360,24 +360,6 @@ class Trainer:
             os.makedirs(self.args.output_dir)
             torch.save(self.model.state_dict(), join(self.args.output_dir,"model_last.pth"))
 
-    @torch.no_grad()
-    def do_periodic_eval(self):
-        self.to_eval()
-        correct = 0
-        count = 0
-        for batch in self.target_loader:
-            images, labels = batch 
-            images = images.to(self.device)
-            outputs, _ = self.model(images)
-            _, preds = outputs.max(dim=1)
-            mask = labels < self.n_known_classes
-            correct += (preds[mask].cpu() == labels[mask]).sum()
-            count += len(labels[mask])
-
-        print(f"Test acc {correct/count:.4f}")
-
-        self.to_train()
-
 def main():
     args = get_args()
 
