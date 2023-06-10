@@ -2,7 +2,6 @@ import math
 import torch
 from functools import partial
 from torch import nn
-from torch.autograd import forward_ad
 from torchvision import models
 
 from timm.models.layers import Mlp, DropPath, trunc_normal_, lecun_normal_
@@ -11,7 +10,7 @@ from timm.models.helpers import named_apply
 class ResNetBackbone(nn.Module):
     def __init__(self):
         super().__init__()
-        self.model_resnet = models.resnet18(pretrained=True)
+        self.model_resnet = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
 
         model_resnet = self.model_resnet
         self.conv1 = model_resnet.conv1
