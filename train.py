@@ -23,11 +23,12 @@ def get_args():
     parser.add_argument("--dataset", default="ImageNet", help="Dataset name",
                         choices=['DTD', 'DomainNet_Real', 'DomainNet_Painting', 'DomainNet_Sketch', 'Places', 
                                  'PACS_DG', 'PACS_SS_DG', 'imagenet_ood', 'imagenet_ood_small', 'DomainNet_DGv2',
-                                 'MCM_benchmarks', 'PatternNet', 'SUN', 'ImageNet1k'])
+                                 'MCM_benchmarks', 'PatternNet', 'SUN', 'ImageNet1k', "Stanford_Cars"])
     parser.add_argument("--source",
                         help="PACS_DG: no_ArtPainting, no_Cartoon, no_Photo, no_Sketch | PACS_SS_DG: Source")
     parser.add_argument("--target",
                         help="PACS_DG: ArtPainting, Cartoon, Photo, Sketch | PACS_SS_DG: ArtPainting, Cartoon, Photo")
+    parser.add_argument("--data_order", type=int, default=-1, help="Which data order to use if more than one is available")
 
     # model parameters
     parser.add_argument("--network", type=str, default="resnet101", choices=["resnet101", "vit", "resend", 
@@ -100,8 +101,8 @@ class Trainer:
 
                 # if ckpt fc size does not match current size discard it
                 if ckpt is not None: 
-                    old_size = ckpt["fc.bias"].shape
-                    if not old_size[0] == self.n_known_classes:
+                    old_size = ckpt["fc.bias"].shape[0]
+                    if not old_size == self.n_known_classes:
                         del ckpt["fc.weight"]
                         del ckpt["fc.bias"]
             elif self.args.model == "random_init":
@@ -120,7 +121,7 @@ class Trainer:
                 
                 # if ckpt fc size does not match current size discard it
                 if ckpt is not None: 
-                    old_size = ckpt["base_model.fc.bias"].shape
+                    old_size = ckpt["base_model.fc.bias"].shape[0]
                     if not old_size == self.n_known_classes:
                         del ckpt["base_model.fc.weight"]
                         del ckpt["base_model.fc.bias"]
@@ -129,9 +130,6 @@ class Trainer:
                 import clip 
 
                 model, preprocess = clip.load("RN101", self.device)
-                self.clip_preprocessor = preprocess
-                # substitute preprocess with CLIP's one
-                self.substitute_val_preprocessor(preprocess)
                 self.clip_model = model
 
                 # the model has no fc by default, so it does not support closed set finetuning
