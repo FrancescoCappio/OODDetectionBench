@@ -71,4 +71,3 @@ python train.py --dataset "$dataset" --source "$src_domain" --target "$tgt_domai
 echo "Vit-L DINOv2 prototypes"
 python train.py --dataset "$dataset" --source "$src_domain" --target "$tgt_domain" --network vit --model DINOv2 --only_eval --evaluator prototypes_distance --data_order "$data_order"
 
->>>>>>> fb2eef2ffa8d5f3d41ec4a103f198be6622f6701

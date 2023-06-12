@@ -1,6 +1,6 @@
 #!/bin/bash 
 
-out=$(python train.py --dataset DTD --network resnet101 --model CE --only_eval | tail -n 1)
+out=$(python train.py --dataset DTD --source in_distribution --target out_distribution --network resnet101 --model CE --only_eval | tail -n 1)
 
 if [ "$out" = "Auroc,FPR95: 0.6721,0.8965" ]; then
     echo "OK"
