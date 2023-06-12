@@ -48,6 +48,8 @@ def compute_prototypes(train_feats, train_lbls, normalize=False):
 @torch.no_grad()
 def prototypes_distance_evaluator(train_loader, test_loader, device, model, contrastive_head=False, cosine_sim=False): 
     # first we extract features for both source and target data
+
+    print("Prototypes distance evaluator")
     train_logits, train_feats, train_lbls = run_model(model, train_loader, device, contrastive=contrastive_head)
     test_logits, test_feats, test_lbls = run_model(model, test_loader, device, contrastive=contrastive_head)
 
