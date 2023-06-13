@@ -4,7 +4,7 @@ from models.evaluators.common import prepare_ood_labels, calc_ood_metrics, run_m
 from models.common import normalize_feats
 
 @torch.no_grad()
-def MCM_evaluator(train_loader, test_loader, model, clip_model, device, known_class_names): 
+def MCM_evaluator(args, train_loader, test_loader, model, clip_model, device, known_class_names): 
     print("Running MCM evaluator with known class names:")
     print(known_class_names)
     # implements NeurIPS 2022: https://openreview.net/forum?id=KnCS9390Va
@@ -12,7 +12,7 @@ def MCM_evaluator(train_loader, test_loader, model, clip_model, device, known_cl
     temperature = 1
 
     # first we extract features for test data
-    test_logits, test_feats, test_lbls = run_model(model, test_loader, device)
+    test_logits, test_feats, test_lbls = run_model(args, model, test_loader, device)
     test_feats = normalize_feats(test_feats)
 
     # known labels have 1 for known samples and 0 for unknown ones

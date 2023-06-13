@@ -4,14 +4,14 @@ import numpy as np
 from models.evaluators.common import prepare_ood_labels, calc_ood_metrics, run_model, closed_set_accuracy
 
 @torch.no_grad()
-def linear_probe_evaluator(train_loader, test_loader, device, model, contrastive_head=False): 
+def linear_probe_evaluator(args, train_loader, test_loader, device, model, contrastive_head=False): 
     # this evaluator trains a logistic regression model on top of the frozen source features 
     # MSP is then applied to compute test normality scores 
     print("Running linear probe evaluator")
 
     # first we extract features for both source and target data
-    train_logits, train_feats, train_lbls = run_model(model, train_loader, device, contrastive=contrastive_head)
-    test_logits, test_feats, test_lbls = run_model(model, test_loader, device, contrastive=contrastive_head)
+    train_logits, train_feats, train_lbls = run_model(args, model, train_loader, device, contrastive=contrastive_head)
+    test_logits, test_feats, test_lbls = run_model(args, model, test_loader, device, contrastive=contrastive_head)
 
     # Perform logistic regression
     classifier = LogisticRegression(random_state=0, C=0.316, max_iter=1000, solver='liblinear')

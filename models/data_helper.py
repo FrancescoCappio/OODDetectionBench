@@ -1,6 +1,7 @@
 from os.path import join
 import torch
 import torch.utils.data as data
+from torch.utils.data.distributed import DistributedSampler
 import torchvision.transforms as transforms
 from PIL import Image
 import numpy as np
@@ -149,8 +150,16 @@ def get_eval_dataloader(args):
         names_target, labels_target = _dataset_info_standard(test_dataset_txt_path)
 
     test_dataset = Dataset(names_target, labels_target, args.path_dataset, img_transformer=img_tr)
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.eval_batch_size, shuffle=False, num_workers=NUM_WORKERS, pin_memory=True, drop_last=False) 
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.eval_batch_size, shuffle=False, num_workers=NUM_WORKERS, pin_memory=True, drop_last=False)
+
+    if args.distributed:
+        test_distributed_sampler = DistributedSampler(dataset=test_dataset, shuffle=False)
+        train_distributed_sampler = DistributedSampler(dataset=train_dataset, shuffle=False)
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.eval_batch_size, sampler=test_distributed_sampler, num_workers=NUM_WORKERS, pin_memory=True, drop_last=False) 
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.eval_batch_size, sampler=train_distributed_sampler, num_workers=NUM_WORKERS, pin_memory=True, drop_last=False)
+    else:
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.eval_batch_size, shuffle=False, num_workers=NUM_WORKERS, pin_memory=True, drop_last=False) 
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.eval_batch_size, shuffle=False, num_workers=NUM_WORKERS, pin_memory=True, drop_last=False)
+
     
     return test_loader, train_loader, known_class_names, n_known_classes
 
@@ -174,7 +183,11 @@ def get_train_dataloader(args):
         print("Warning: you are training with a dataset smaller than a single batch")
         drop_last = False
 
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.train_batch_size, shuffle=True, num_workers=NUM_WORKERS, pin_memory=True, drop_last=drop_last)
+    if args.distributed:
+        train_distributed_sampler = DistributedSampler(dataset=train_dataset, shuffle=True)
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.train_batch_size, sampler=train_distributed_sampler, num_workers=NUM_WORKERS, pin_memory=True, drop_last=drop_last)
+    else:
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.train_batch_size, shuffle=True, num_workers=NUM_WORKERS, pin_memory=True, drop_last=drop_last)
 
     return train_loader
 

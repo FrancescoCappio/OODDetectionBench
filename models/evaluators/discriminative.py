@@ -4,12 +4,12 @@ from tqdm import tqdm
 from models.evaluators.common import run_model, prepare_ood_labels, calc_ood_metrics, closed_set_accuracy
 
 @torch.no_grad()
-def MSP_evaluator(train_loader, test_loader, device, model): 
+def MSP_evaluator(args, train_loader, test_loader, device, model): 
     # implements ICLR 2017 https://openreview.net/forum?id=Hkg4TI9xl
 
     # first we extract features for target data
     train_lbls = train_loader.dataset.labels
-    test_logits, test_feats, test_lbls = run_model(model, test_loader, device)
+    test_logits, test_feats, test_lbls = run_model(args, model, test_loader, device)
 
     # known labels have 1 for known samples and 0 for unknown ones
     known_labels = torch.unique(torch.tensor(train_lbls))

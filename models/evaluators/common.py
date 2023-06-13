@@ -2,6 +2,7 @@ import torch
 from ood_metrics import calc_metrics
 from tqdm import tqdm 
 import numpy as np
+from utils.dist_utils import all_gather
 
 def prepare_ood_labels(known_labels, test_labels):
     # 0 means OOD
@@ -11,7 +12,7 @@ def prepare_ood_labels(known_labels, test_labels):
     return ood_labels
 
 @torch.no_grad()
-def run_model(model, loader, device, contrastive=False):
+def run_model(args, model, loader, device, contrastive=False):
 
     feats_list = []
     logits_list = []
@@ -29,7 +30,18 @@ def run_model(model, loader, device, contrastive=False):
         gt_list.append(target)
         logits_list.append(out.cpu())
 
-    return  torch.cat(logits_list), torch.cat(feats_list), torch.cat(gt_list)
+    logits_list, feats_list, gt_list = torch.cat(logits_list), torch.cat(feats_list), torch.cat(gt_list)
+
+    if args.distributed and args.n_gpus > 1: 
+        all_logits = all_gather(logits_list)
+        all_feats = all_gather(feats_list)
+        all_gt = all_gather(gt_list)
+
+        logits_list = torch.cat([l for l in all_logits])
+        feats_list = torch.cat([l for l in all_feats])
+        gt_list = torch.cat([l for l in all_gt])
+
+    return logits_list, feats_list, gt_list
 
 def calc_ood_metrics(test_normality_scores, ood_labels):
     num_known = (ood_labels == 1).sum()
@@ -52,6 +64,5 @@ def closed_set_accuracy(closed_set_preds, closed_set_lbls):
     correct = (closed_set_preds == closed_set_lbls).sum()
 
     acc = correct/len(closed_set_lbls)
-    print(f"Closed set accuracy: {acc:.4f}")
 
     return acc

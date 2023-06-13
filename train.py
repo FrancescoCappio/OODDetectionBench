@@ -1,16 +1,17 @@
 import argparse
+import os
+import sys
 from os.path import join
+from os import environ
 
 import torch
 from torch import nn, optim
-import os
-import sys
-from models.evaluators.common import run_model, prepare_ood_labels, closed_set_accuracy
+from torch.nn.parallel import DistributedDataParallel as DDP 
+import torch.distributed as dist
 
 from models.resnet import get_resnet
 from models.data_helper import get_eval_dataloader, get_train_dataloader, split_train_loader, check_data_consistency
-from utils.log_utils import count_parameters
-
+from utils.log_utils import count_parameters, LogUnbuffered
 from models.evaluators import *
 
 def get_args():
@@ -64,7 +65,8 @@ def get_args():
 
     # output_folder for checkpoints
     parser.add_argument("--save_ckpt", action='store_true', default=False, help="Should save the training output checkpoint to --output_dir?")
-    parser.add_argument("--output_dir", type=str, default="outputs/", help="Location for output checkpoints")
+    parser.add_argument("--output_dir", type=str, default="", help="Location for output checkpoints")
+    parser.add_argument("--debug", action='store_true', default=False, help="Run in debug mode, disable file logger")
 
     args = parser.parse_args()
     args.path_dataset = os.path.expanduser(args.path_dataset)
@@ -89,7 +91,7 @@ class Trainer:
         self.contrastive_enabled = False
         print(f"Model: {self.args.model}, Backbone: {self.args.network}")
 
-        ckpt = torch.load(self.args.checkpoint_path) if self.args.checkpoint_path else None
+        ckpt = torch.load(self.args.checkpoint_path, map_location=device) if self.args.checkpoint_path else None
 
         # setup the network and OOD model 
         if self.args.network == "resnet101":
@@ -215,6 +217,9 @@ class Trainer:
 
         self.to_device(self.device)
 
+        if self.args.distributed:
+            self.model = DDP(self.model)
+
         print("Number of parameters: ", count_parameters(self.model))
 
     def to_device(self, device):
@@ -233,12 +238,14 @@ class Trainer:
         # similarity based scores instead of L2 distance based ones
         cosine_similarity = self.args.model in ["simclr", "supclr", "CSI", "supCSI"] and self.contrastive_enabled
 
+        args = self.args
+
         if self.args.evaluator == "prototypes_distance":
-            metrics = prototypes_distance_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
+            metrics = prototypes_distance_evaluator(args, train_loader=self.source_loader_test, test_loader=self.target_loader,
                                                     device=self.device, model=self.model, contrastive_head=self.contrastive_enabled,
                                                     cosine_sim=cosine_similarity)
         elif self.args.evaluator == "MSP":
-            metrics = MSP_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
+            metrics = MSP_evaluator(args, train_loader=self.source_loader_test, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
 
         elif self.args.evaluator == "ODIN":
@@ -265,25 +272,25 @@ class Trainer:
                                     test_loader=self.target_loader, device=self.device, model=self.model, finetuned=not self.args.only_eval)
 
         elif self.args.evaluator == "knn_ood":
-            metrics = knn_ood_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
+            metrics = knn_ood_evaluator(args, train_loader=self.source_loader_test, test_loader=self.target_loader,
                                         device=self.device, model=self.model, contrastive_head=self.contrastive_enabled, K=self.args.NNK)
 
         elif self.args.evaluator == "knn_distance":
-            metrics = knn_distance_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
+            metrics = knn_distance_evaluator(args, train_loader=self.source_loader_test, test_loader=self.target_loader,
                                             device=self.device, model=self.model, contrastive_head=self.contrastive_enabled, K=self.args.NNK,
                                             cosine_sim=cosine_similarity)
 
         elif self.args.evaluator == "linear_probe":
-            metrics = linear_probe_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
+            metrics = linear_probe_evaluator(args, train_loader=self.source_loader_test, test_loader=self.target_loader,
                                             device=self.device, model=self.model, contrastive_head=self.contrastive_enabled)
 
         elif self.args.evaluator == "MCM":
             assert self.args.model == "clip", "MCM evaluator supports only clip based models!"
-            metrics = MCM_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
+            metrics = MCM_evaluator(args, train_loader=self.source_loader_test, test_loader=self.target_loader,
                                                     device=self.device, model=self.model, clip_model=self.clip_model, known_class_names=self.known_class_names)
 
         elif self.args.evaluator == "resend":
-            metrics = resend_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
+            metrics = resend_evaluator(args,train_loader=self.source_loader_test, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
 
         else:
@@ -354,41 +361,82 @@ class Trainer:
                 avg_loss = 0
 
         # save final checkpoint 
-        if self.args.save_ckpt:
-            os.makedirs(self.args.output_dir)
-            torch.save(self.model.state_dict(), join(self.args.output_dir,"model_last.pth"))
+        if self.args.save_ckpt and not self.args.distributed or self.args.global_rank == 0:
+            save_model = self.model.module if self.args.distributed else self.model
+            torch.save(save_model.state_dict(), join(self.args.output_dir, "model_last.pth"))
+
+        optimizer.zero_grad()
 
 def main():
     args = get_args()
 
-    print("###############################################################################")
-    print("######################### OOD Detection Benchmark #############################")
-    print("###############################################################################")
+    if args.save_ckpt:
+        assert args.output_dir, "You need to specify an output dir if you want the model to be saved"
+
     ### Set torch device ###
     if torch.cuda.is_available():
-        if not hasattr(args, 'local_rank') or args.local_rank is None:
-            args.distributed = False
-            args.n_gpus = 0
-        else:
-            torch.cuda.set_device(args.local_rank)
+        if hasattr(args, 'local_rank') and not args.local_rank is None:
+            assert False, "Please use torchrun for distributed execution"
+
+        if "LOCAL_RANK" in environ:
+            args.local_rank = int(environ["LOCAL_RANK"])
             args.distributed = True
+            torch.cuda.set_device(args.local_rank)
+        else:
+            args.distributed = False
+            args.n_gpus = 1
+
         device = torch.device("cuda")
     else:
         print("WARNING. Running in CPU mode")
         args.distributed = False
         device = torch.device("cpu")
 
-    assert not args.distributed, "This code does not support distributed execution!"
+    if args.distributed:
+        dist.init_process_group('nccl')
+        args.n_gpus = dist.get_world_size()
+        args.global_rank = int(environ['RANK'])
+        print("Process rank", args.global_rank, "starting")
 
-    if not args.only_eval:
-        if args.save_ckpt:
-            assert not os.path.exists(args.output_dir), "Output dir {ckpt_dir} already exists, stopping to avoid overwriting"
+    if args.output_dir and ((args.distributed and args.global_rank == 0) or not args.distributed):
+        assert not os.path.exists(args.output_dir), f"Output dir {args.output_dir} already exists, stopping to avoid overwriting"
+        os.makedirs(args.output_dir)
+        stdout_file = join(args.output_dir, "stdout.txt")
+        stderr_file = join(args.output_dir, "stderr.txt")
+    else:
+        stdout_file, stderr_file = None, None
+
+    # print on both log file and stdout
+    if not args.debug:
+        orig_stdout = sys.stdout
+        orig_stderr = sys.stderr
+
+        sys.stdout = LogUnbuffered(args, orig_stdout, stdout_file)
+        sys.stderr = LogUnbuffered(args, orig_stderr, stderr_file)
+
+    print("###############################################################################")
+    print("######################### OOD Detection Benchmark #############################")
+    print("###############################################################################")
+    
+    if args.evaluator in ["gram", "ODIN", "energy", "gradnorm", "mahalanobis"]:
+        assert not args.distributed, f"{args.evaluator} evaluator does not support distributed execution!"
 
     trainer = Trainer(args, device)
     if not args.only_eval:
         trainer.do_train()
 
+    #    if not args.distributed or (args.distributed and args.global_rank == 0):
+    #        import ipdb; ipdb.set_trace() 
+    #
+    #    dist.barrier()
+
     trainer.do_final_eval()
+
+    if not args.debug:
+        sys.stdout.close()
+        sys.stderr.close()
+        sys.stdout = orig_stdout
+        sys.stderr = orig_stderr
 
 
 if __name__ == "__main__":
