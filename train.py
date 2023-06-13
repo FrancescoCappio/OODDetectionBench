@@ -425,11 +425,6 @@ def main():
     if not args.only_eval:
         trainer.do_train()
 
-    #    if not args.distributed or (args.distributed and args.global_rank == 0):
-    #        import ipdb; ipdb.set_trace() 
-    #
-    #    dist.barrier()
-
     trainer.do_final_eval()
 
     if not args.debug:
