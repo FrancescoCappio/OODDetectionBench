@@ -341,7 +341,7 @@ class Trainer:
 
         train_iter = iter(train_loader)
         log_period = 10
-        ckpt_period = 20
+        ckpt_period = 500
         avg_loss = 0
         print("Start training")
         for it in range(self.args.iterations):
