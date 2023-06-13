@@ -1,6 +1,6 @@
 import torch
 import clip
-from models.evaluators.common import prepare_ood_labels, calc_ood_metrics, run_model
+from models.evaluators.common import prepare_ood_labels, calc_ood_metrics, run_model, closed_set_accuracy
 from models.common import normalize_feats
 
 @torch.no_grad()
@@ -37,8 +37,11 @@ def MCM_evaluator(args, train_loader, test_loader, model, clip_model, device, kn
     probs = cos_sim_logits.type(torch.float).softmax(dim=-1).cpu()
 
     max_pred_prob, pred_cls = probs.max(dim=1)
+    known_mask = ood_labels == 1
+    cs_acc = closed_set_accuracy(pred_cls[known_mask], test_lbls[known_mask])
 
     metrics = calc_ood_metrics(max_pred_prob, ood_labels)
+    metrics["cs_acc"] = cs_acc
 
     return metrics 
 

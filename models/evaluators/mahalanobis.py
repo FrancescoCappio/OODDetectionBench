@@ -96,7 +96,7 @@ def sample_estimator(model, num_classes, feature_list, train_loader, device):
     list_features = [[0] * num_classes for _ in range(len(feature_list))]
 
     # for each model output layer, for each class, we extract for each sample 
-    # the per-channel mean feaure value
+    # the per-channel mean feature value
     for batch in tqdm(train_loader):
 
         data, target = batch

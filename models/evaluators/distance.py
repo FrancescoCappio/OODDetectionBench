@@ -1,7 +1,7 @@
 import torch 
 import faiss
 
-from models.evaluators.common import prepare_ood_labels, calc_ood_metrics, run_model
+from models.evaluators.common import prepare_ood_labels, calc_ood_metrics, run_model, closed_set_accuracy
 from models.common import normalize_feats
 
 def get_euclidean_normality_scores(test_features, prototypes):
@@ -15,7 +15,7 @@ def get_euclidean_normality_scores(test_features, prototypes):
 
     test_scores, test_predictions = test_dists.min(dim=1)
     
-    return 1 - test_scores
+    return 1 - test_scores, test_predictions
 
 def get_cos_sim_normality_scores(test_features, prototypes):
     print("Computing cosine similarity distances from prototypes")
@@ -29,7 +29,7 @@ def get_cos_sim_normality_scores(test_features, prototypes):
     assert test_similarities.max() <= 1 and test_similarities.min() >= -1, "Range for cosine similarities is not correct!"
     test_scores, test_predictions = test_similarities.max(dim=1)
 
-    return test_scores
+    return test_scores, test_predictions
 
 def compute_prototypes(train_feats, train_lbls, normalize=False):
 
@@ -61,11 +61,16 @@ def prototypes_distance_evaluator(args, train_loader, test_loader, device, model
     print(f"Num known: {ood_labels.sum()}. Num unknown: {len(test_lbls) - ood_labels.sum()}.")
 
     if cosine_sim:
-        test_normality_scores = get_cos_sim_normality_scores(test_feats, prototypes)
+        test_normality_scores, test_predictions = get_cos_sim_normality_scores(test_feats, prototypes)
     else:
-        test_normality_scores = get_euclidean_normality_scores(test_feats, prototypes)
+        test_normality_scores, test_predictions = get_euclidean_normality_scores(test_feats, prototypes)
+
+    
+    known_mask = ood_labels == 1
+    cs_acc = closed_set_accuracy(test_predictions[known_mask], test_lbls[known_mask])
 
     metrics = calc_ood_metrics(test_normality_scores, ood_labels)
+    metrics["cs_acc"] = cs_acc
 
     return metrics 
 
@@ -93,7 +98,9 @@ def knn_distance_evaluator(args, train_loader, test_loader, device, model, contr
         index = faiss.IndexFlatL2(train_feats.shape[1])
 
     index.add(train_feats.numpy())
-    D, _ = index.search(test_feats.numpy(), K)
+    D, train_NN_ids = index.search(test_feats.numpy(), K)
+    train_NN_lbls = train_lbls[train_NN_ids]
+    test_predictions = torch.tensor([pred_NN_lbls.bincount().argmax().item() for pred_NN_lbls in train_NN_lbls])
 
     test_normality_scores = D[:,-1]
     if not cosine_sim:
@@ -102,7 +109,10 @@ def knn_distance_evaluator(args, train_loader, test_loader, device, model, contr
 
     print(f"Num known: {ood_labels.sum()}. Num unknown: {len(test_lbls) - ood_labels.sum()}.")
 
+    known_mask = ood_labels == 1
+    cs_acc = closed_set_accuracy(test_predictions[known_mask], test_lbls[known_mask])
     metrics = calc_ood_metrics(test_normality_scores, ood_labels)
+    metrics["cs_acc"] = cs_acc
 
     return metrics 
 
