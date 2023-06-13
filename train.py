@@ -303,6 +303,15 @@ class Trainer:
         fpr_auroc = metrics["fpr_at_95_tpr"]
         print(f"Auroc,FPR95: {auroc:.4f},{fpr_auroc:.4f}")
 
+    def save_ckpt(self, iteration):
+        if self.args.save_ckpt and (not self.args.distributed or self.args.global_rank == 0):
+            save_model = self.model.module if self.args.distributed else self.model
+            ckpt_path = join(self.args.output_dir, "model_last.pth")
+            torch.save(save_model.state_dict(), ckpt_path)
+            with open(join(self.args.output_dir, "last_iter"), "w") as fout:
+                fout.write(f"{iteration}")
+            print(f"Saved model to {ckpt_path}")
+
     def do_train(self):
         # prepare data 
         
@@ -332,6 +341,7 @@ class Trainer:
 
         train_iter = iter(train_loader)
         log_period = 10
+        ckpt_period = 20
         avg_loss = 0
         print("Start training")
         for it in range(self.args.iterations):
@@ -360,10 +370,12 @@ class Trainer:
                 print(f"Iterations: {it+1:6d}/{self.args.iterations}\t Loss: {avg_loss / log_period:6.4f} \t Acc: {train_acc:6.4f}")
                 avg_loss = 0
 
+            if (it+1) % ckpt_period == 0:
+                self.save_ckpt(it)
+
         # save final checkpoint 
-        if self.args.save_ckpt and not self.args.distributed or self.args.global_rank == 0:
-            save_model = self.model.module if self.args.distributed else self.model
-            torch.save(save_model.state_dict(), join(self.args.output_dir, "model_last.pth"))
+        if self.args.save_ckpt and (not self.args.distributed or self.args.global_rank == 0):
+            self.save_ckpt(self.args.iterations)
 
         optimizer.zero_grad()
 
