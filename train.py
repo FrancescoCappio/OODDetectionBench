@@ -52,6 +52,7 @@ def get_args():
 
     # finetuning params 
     parser.add_argument("--iterations", type=int, default=100, help="Number of finetuning iterations")
+    parser.add_argument("--epochs", type=int, default=-1, help="Use value >= 0 if you want to specify training length in terms of epochs")
     parser.add_argument("--learning_rate", type=float, default=0.003, help="Learning rate (fixed) for finetuning")
     parser.add_argument("--freeze_backbone", action="store_true", default=False, help="Train only cls head during finetuning")
 
@@ -322,6 +323,10 @@ class Trainer:
             train_loader, _ = split_train_loader(train_loader, self.args.seed)
 
         check_data_consistency(train_loader, self.source_loader_test)
+
+        if self.args.epochs > 0: 
+            iters_per_epoch = len(train_loader)
+            self.args.iterations = self.args.epochs * iters_per_epoch
 
         self.to_train()
 
