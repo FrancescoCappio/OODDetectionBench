@@ -53,7 +53,7 @@ def get_args():
     # finetuning params 
     parser.add_argument("--iterations", type=int, default=100, help="Number of finetuning iterations")
     parser.add_argument("--epochs", type=int, default=-1, help="Use value >= 0 if you want to specify training length in terms of epochs")
-    parser.add_argument("--learning_rate", type=float, default=0.003, help="Learning rate (fixed) for finetuning")
+    parser.add_argument("--learning_rate", type=float, default=0.003, help="Learning rate for finetuning, automatically multiplied by world size")
     parser.add_argument("--freeze_backbone", action="store_true", default=False, help="Train only cls head during finetuning")
 
     # run params 
@@ -328,6 +328,8 @@ class Trainer:
             iters_per_epoch = len(train_loader)
             self.args.iterations = self.args.epochs * iters_per_epoch
 
+        if self.args.distributed:
+            self.args.learning_rate *= self.args.n_gpus
         self.to_train()
 
         # prepare optimizer 
@@ -348,7 +350,7 @@ class Trainer:
         log_period = 10
         ckpt_period = 500
         avg_loss = 0
-        print("Start training")
+        print(f"Start training, lr={self.args.learning_rate}, iterations={self.args.iterations}")
         for it in range(self.args.iterations):
 
             try: 

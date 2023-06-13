@@ -167,6 +167,9 @@ def get_train_dataloader(args):
 
     dataset = args.dataset
     source = "in_distribution" if args.source is None else args.source
+    if not args.data_order == -1:
+        source = source + f"_o{args.data_order}"
+
     print(f"Dataset {dataset}, train_data: {source}")
 
     train_dataset_txt_path = join(PATH_TO_TXT, dataset, source + '.txt')
