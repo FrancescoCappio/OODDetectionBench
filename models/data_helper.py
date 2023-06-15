@@ -111,7 +111,7 @@ def get_eval_dataloader(args):
     if args.few_shot > 0: 
         names_sources, labels_sources = few_shot_subsample(names_sources, labels_sources, n_shots=args.few_shot, seed=args.seed)
 
-    if dataset == "MCM_benchmarks" and source in ["Stanford-Cars", "CUB-200", "Oxford-Pet"]:
+    if dataset == "MCM_benchmarks" and source in ["Stanford-Cars", "CUB-200", "Oxford-Pet", "imagenet"]:
         class_names_file = f"data/txt_lists/MCM_benchmarks/{source}_names.txt"
         print(f"Reading class names from: {class_names_file}")
 
