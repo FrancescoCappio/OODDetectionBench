@@ -12,6 +12,7 @@ import torch.distributed as dist
 from models.resnet import get_resnet
 from models.data_helper import get_eval_dataloader, get_train_dataloader, split_train_loader, check_data_consistency
 from utils.log_utils import count_parameters, LogUnbuffered
+from utils.optim import LinearWarmupCosineAnnealingLR
 from models.evaluators import *
 
 def get_args():
@@ -54,6 +55,8 @@ def get_args():
     parser.add_argument("--iterations", type=int, default=100, help="Number of finetuning iterations")
     parser.add_argument("--epochs", type=int, default=-1, help="Use value >= 0 if you want to specify training length in terms of epochs")
     parser.add_argument("--learning_rate", type=float, default=0.003, help="Learning rate for finetuning, automatically multiplied by world size")
+    parser.add_argument("--warmup_iters", type=int, default=0, help="Number of lr warmup iterations")
+    parser.add_argument("--warmup_epochs", type=int, default=-1, help="Number of lr warmup epochs, to use when train len specified with epochs")
     parser.add_argument("--freeze_backbone", action="store_true", default=False, help="Train only cls head during finetuning")
 
     # run params 
@@ -332,6 +335,9 @@ class Trainer:
             iters_per_epoch = len(train_loader)
             self.args.iterations = self.args.epochs * iters_per_epoch
 
+            if self.args.warmup_epochs > 0:
+                self.args.warmup_iters = self.args.warmup_epochs * iters_per_epoch
+
         if self.args.distributed:
             self.args.learning_rate *= self.args.n_gpus
         self.to_train()
@@ -347,6 +353,7 @@ class Trainer:
                 raise NotImplementedError("Don't know how to access fc")
 
         optimizer = optim.SGD(optim_params, weight_decay=.0005, momentum=.9, lr=self.args.learning_rate)
+        scheduler = LinearWarmupCosineAnnealingLR(optimizer, warmup_epochs=self.args.warmup_iters, max_epochs=self.args.iterations)
         # loss function 
         loss_fn = nn.CrossEntropyLoss()
 
@@ -354,7 +361,7 @@ class Trainer:
         log_period = 10
         ckpt_period = 500
         avg_loss = 0
-        print(f"Start training, lr={self.args.learning_rate}, iterations={self.args.iterations}")
+        print(f"Start training, lr={self.args.learning_rate}, iterations={self.args.iterations}, warmup_iters={self.args.warmup_iters}")
         for it in range(self.args.iterations):
 
             try: 
@@ -373,12 +380,14 @@ class Trainer:
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            scheduler.step()
 
             avg_loss += loss.item()
             if (it+1) % log_period == 0:
                 _,preds = outputs.max(dim=1)
                 train_acc = ((preds == labels).sum()/len(preds)).cpu().item()
-                print(f"Iterations: {it+1:6d}/{self.args.iterations}\t Loss: {avg_loss / log_period:6.4f} \t Acc: {train_acc:6.4f}")
+                current_lr = optimizer.param_groups[0]['lr']
+                print(f"Iterations: {it+1:6d}/{self.args.iterations}\t LR: {current_lr:6.4f}\t Loss: {avg_loss / log_period:6.4f} \t Acc: {train_acc:6.4f}")
                 avg_loss = 0
 
             if (it+1) % ckpt_period == 0:
