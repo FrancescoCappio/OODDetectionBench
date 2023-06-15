@@ -219,7 +219,7 @@ class Trainer:
         self.to_device(self.device)
 
         if self.args.distributed:
-            self.model = DDP(self.model)
+            self.model = DDP(self.model, find_unused_parameters=True)
 
         print("Number of parameters: ", count_parameters(self.model))
 
