@@ -38,7 +38,7 @@ def get_args():
                                                                     "resend", "DINOv2", "BiT", "CE-IM22k", "random_init"])
     parser.add_argument("--evaluator", type=str, help="Strategy to compute normality scores", default="prototypes_distance",
                         choices=["prototypes_distance", "MSP", "ODIN", "energy", "gradnorm", "mahalanobis", "gram", "knn_distance",
-                                 "linear_probe", "MCM", "knn_ood", "resend"])
+                                 "linear_probe", "MCM", "knn_ood", "resend", "react"])
 
     # evaluators-specific parameters 
     parser.add_argument("--NNK", help="K value to use for Knn distance evaluator", type=int, default=1)
@@ -261,6 +261,10 @@ class Trainer:
             metrics = gradnorm_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
 
+        elif self.args.evaluator == "react":
+            metrics = react_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
+                                                    device=self.device, model=self.model)
+
         elif self.args.evaluator == "mahalanobis":
             metrics = mahalanobis_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
@@ -437,7 +441,7 @@ def main():
     print("######################### OOD Detection Benchmark #############################")
     print("###############################################################################")
     
-    if args.evaluator in ["gram", "ODIN", "energy", "gradnorm", "mahalanobis"]:
+    if args.evaluator in ["gram", "ODIN", "energy", "gradnorm", "mahalanobis", "react"]:
         assert not args.distributed, f"{args.evaluator} evaluator does not support distributed execution!"
 
     trainer = Trainer(args, device)
