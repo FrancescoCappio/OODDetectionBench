@@ -54,7 +54,7 @@ def get_args():
     # finetuning params 
     parser.add_argument("--iterations", type=int, default=100, help="Number of finetuning iterations")
     parser.add_argument("--epochs", type=int, default=-1, help="Use value >= 0 if you want to specify training length in terms of epochs")
-    parser.add_argument("--learning_rate", type=float, default=0.003, help="Learning rate for finetuning, automatically multiplied by world size")
+    parser.add_argument("--learning_rate", type=float, default=0.001, help="Learning rate for finetuning, automatically multiplied by world size")
     parser.add_argument("--warmup_iters", type=int, default=0, help="Number of lr warmup iterations")
     parser.add_argument("--warmup_epochs", type=int, default=-1, help="Number of lr warmup epochs, to use when train len specified with epochs")
     parser.add_argument("--freeze_backbone", action="store_true", default=False, help="Train only cls head during finetuning")
