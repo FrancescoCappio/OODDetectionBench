@@ -41,3 +41,14 @@ def _no_grad_trunc_normal_(tensor, mean, std, a, b):
 def trunc_normal_(tensor, mean=0., std=1., a=-2., b=2.):
     # type: (Tensor, float, float, float, float) -> Tensor
     return _no_grad_trunc_normal_(tensor, mean, std, a, b)
+
+def clean_ckpt(ckpt, model):
+    new_dict = {}
+    model_dict = model.state_dict()
+    for k in ckpt.keys():
+        if k not in model_dict and k.startswith("base_model"):
+            new_k = k.replace("base_model.","")
+            new_dict[new_k] = ckpt[k]
+        else:
+            new_dict[k] = ckpt[k]
+    return new_dict

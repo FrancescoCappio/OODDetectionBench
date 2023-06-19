@@ -13,6 +13,7 @@ from models.resnet import get_resnet
 from models.data_helper import get_eval_dataloader, get_train_dataloader, split_train_loader, check_data_consistency
 from utils.log_utils import count_parameters, LogUnbuffered
 from utils.optim import LinearWarmupCosineAnnealingLR
+from utils.utils import clean_ckpt
 from models.evaluators import *
 
 def get_args():
@@ -149,11 +150,12 @@ class Trainer:
             if self.args.model in ["CE", "DINO"]:
 
                 import timm
-                # we set num_classes to 0 in order to obtain pooled feats
-                model = timm.create_model("deit_base_patch16_224", pretrained=True, num_classes=0)
                 self.output_num = 768
 
                 if self.args.model == "DINO":
+                    # we set num_classes to 0 in order to obtain pooled feats
+                    model = timm.create_model("deit_base_patch16_224", pretrained=True, num_classes=0)
+
                     # if we didn't need the contrastive head we could use the model from huggingface:
                     # https://huggingface.co/facebook/dino-vitb16
                     self.contrastive_enabled = not args.disable_contrastive_head
@@ -161,8 +163,21 @@ class Trainer:
                     self.model = WrapperWithContrastiveHead(model, out_dim=self.output_num, contrastive_type="DINO", 
                                                             add_cls_head=True, n_classes=self.n_known_classes)
                 else:
-                    from models.common import WrapperWithFC
-                    model = WrapperWithFC(model, self.output_num, self.n_known_classes)
+                    import types 
+
+                    # we set num_classes to 0 in order to obtain pooled feats
+                    model = timm.create_model("deit_base_patch16_224", pretrained=True)
+                    model.fc = model.head
+
+                    if not self.n_known_classes == 1000:
+                        model.fc = nn.Linear(in_features=768, out_features=self.n_known_classes)
+
+                    def my_forward(self, x):
+                        feats = self.forward_head(self.forward_features(x), pre_logits=True)
+                        logits = self.fc(feats)
+                        return logits, feats
+
+                    model.forward = types.MethodType(my_forward, model)
                     self.model = model 
 
             elif self.args.model == "clip":
@@ -216,10 +231,12 @@ class Trainer:
 
         if ckpt is not None: 
             print(f"Loading checkpoint {self.args.checkpoint_path}")
-            missing, unexpected = self.model.load_state_dict(ckpt, strict=False)
+            missing, unexpected = self.model.load_state_dict(clean_ckpt(ckpt, model), strict=False)
             print(f"Missing keys: {missing}, unexpected keys: {unexpected}")
 
         self.to_device(self.device)
+        self.args.output_num = self.output_num
+        self.args.n_known_classes = self.n_known_classes
 
         if self.args.distributed:
             self.model = DDP(self.model, find_unused_parameters=True)

@@ -26,3 +26,12 @@ else
     echo $out
 fi
 
+out=$(python train.py --dataset DTD --source support --target test --data_order 0 --model DINO --checkpoint_path pretrained_models/DINO_vitb.pth --network vit --evaluator knn_distance --only_eval --disable_contrastive_head | tail -n 1)
+
+if [ "$out" = "Auroc,FPR95: 0.7359,0.7960" ]; then
+    echo "OK"
+else
+    echo "KO!!" 
+    echo $out
+fi
+
