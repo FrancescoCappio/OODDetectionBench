@@ -73,6 +73,9 @@ def get_args():
     parser.add_argument("--output_dir", type=str, default="", help="Location for output checkpoints")
     parser.add_argument("--debug", action='store_true', default=False, help="Run in debug mode, disable file logger")
 
+    # performance options 
+    parser.add_argument("--on_disk", action='store_true', default=False, help="Save/Recover extracted features on the disk. To be used for really large ID datasets (e.g. ImageNet)")
+
     args = parser.parse_args()
     args.path_dataset = os.path.expanduser(args.path_dataset)
 
@@ -125,6 +128,8 @@ class Trainer:
                 from models.common import WrapperWithContrastiveHead
                 base_model, self.output_num = get_resnet(self.args.network, n_known_classes=self.n_known_classes)
                 self.model = WrapperWithContrastiveHead(base_model, out_dim=self.output_num, contrastive_type=contrastive_type)
+                if not args.disable_contrastive_head:
+                    self.output_num = self.model.contrastive_out_dim
                 
                 # if ckpt fc size does not match current size discard it
                 if ckpt is not None: 
@@ -224,14 +229,14 @@ class Trainer:
 
             from models.resend import ReSeND
 
-            self.model = ReSeND()
+            self.model = ReSeND(n_known_classes=self.n_known_classes)
             self.output_num = self.model.output_num
         else:
             raise NotImplementedError(f"Network {self.args.network} not implemented")
 
         if ckpt is not None: 
             print(f"Loading checkpoint {self.args.checkpoint_path}")
-            missing, unexpected = self.model.load_state_dict(clean_ckpt(ckpt, model), strict=False)
+            missing, unexpected = self.model.load_state_dict(clean_ckpt(ckpt, self.model), strict=False)
             print(f"Missing keys: {missing}, unexpected keys: {unexpected}")
 
         self.to_device(self.device)

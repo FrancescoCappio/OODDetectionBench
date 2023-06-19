@@ -192,12 +192,13 @@ class RelationalTransformer(nn.Module):
         return output
 
 class ReSeND(nn.Module):
-    def __init__(self):
+    def __init__(self, n_known_classes):
         super().__init__()
         self.feature_extractor = ResNetBackbone()
         self.output_num = self.feature_extractor.output_num()
         self.cls_rel = RelationalTransformer(self.output_num, num_classes=1, depth=4, num_heads=12)
+        self.n_known_classes = n_known_classes
 
     def forward(self, x):
         feats = self.feature_extractor(x)
-        return feats, feats
+        return torch.zeros((x.shape[0],self.n_known_classes), dtype=x.dtype, device=x.device), feats

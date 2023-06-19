@@ -1,10 +1,17 @@
+import torch
 import torch.nn as nn
+import numpy as np
 from utils.utils import trunc_normal_
 
 BATCH_NORM_EPSILON = 1e-5
 
 def normalize_feats(feats):
-    return feats/feats.norm(dim=1,keepdim=True).expand(-1,feats.shape[1])
+    if isinstance(feats, torch.Tensor):
+        return feats/feats.norm(dim=1,keepdim=True).expand(-1,feats.shape[1])
+    elif isinstance(feats, np.ndarray):
+        return feats/np.linalg.norm(feats, axis=1, keepdims=True)
+    else:
+        raise NotImplementedError("Unknown type")
 
 class SimCLRContrastiveHead(nn.Module):
     def __init__(self, channels_in, out_dim=128, num_layers=3):
@@ -60,10 +67,6 @@ class DINOHead(nn.Module):
             self.mlp = nn.Sequential(*layers)
         self.apply(self._init_weights)
         self.last_layer = nn.Linear(bottleneck_dim, out_dim, bias=False)
-        #self.last_layer = nn.utils.weight_norm(nn.Linear(bottleneck_dim, out_dim, bias=False))
-        #self.last_layer.weight_g.data.fill_(1)
-        #if norm_last_layer:
-        #    self.last_layer.weight_g.requires_grad = False
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -94,15 +97,17 @@ class WrapperWithContrastiveHead(nn.Module):
         assert contrastive_type in ["simclr", "CSI", "DINO"], f"Unknown contrastive head type {contrastive_type}"
         self.base_model = base_model
         self.add_cls_head = add_cls_head
+        self.contrastive_out_dim = 128
 
         if self.add_cls_head:
             self.fc = nn.Linear(in_features=out_dim, out_features=n_classes)
         if contrastive_type == "simclr":
-            self.contrastive_head = SimCLRContrastiveHead(channels_in=out_dim)
+            self.contrastive_head = SimCLRContrastiveHead(channels_in=out_dim, out_dim=self.contrastive_out_dim)
         elif contrastive_type == "CSI":
-            self.contrastive_head = CSIContrastiveHead(channels_in=out_dim)
+            self.contrastive_head = CSIContrastiveHead(channels_in=out_dim, out_dim=self.contrastive_out_dim)
         elif contrastive_type  == "DINO":
-            self.contrastive_head = DINOHead(in_dim=out_dim, out_dim=65536)
+            self.contrastive_out_dim = 65536
+            self.contrastive_head = DINOHead(in_dim=out_dim, out_dim=self.contrastive_out_dim)
 
     def forward(self, x, contrastive=False): 
         if self.add_cls_head:

@@ -10,8 +10,8 @@ def linear_probe_evaluator(args, train_loader, test_loader, device, model, contr
     print("Running linear probe evaluator")
 
     # first we extract features for both source and target data
-    train_logits, train_feats, train_lbls = run_model(args, model, train_loader, device, contrastive=contrastive_head)
-    test_logits, test_feats, test_lbls = run_model(args, model, test_loader, device, contrastive=contrastive_head)
+    train_logits, train_feats, train_lbls = run_model(args, model, train_loader, device, contrastive=contrastive_head, support=True)
+    test_logits, test_feats, test_lbls = run_model(args, model, test_loader, device, contrastive=contrastive_head, support=False)
 
     # Perform logistic regression
     classifier = LogisticRegression(random_state=0, C=0.316, max_iter=1000, solver='liblinear')

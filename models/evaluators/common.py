@@ -1,3 +1,4 @@
+import os
 import torch 
 from ood_metrics import calc_metrics
 from tqdm import tqdm 
@@ -7,39 +8,78 @@ from utils.dist_utils import all_gather
 def prepare_ood_labels(known_labels, test_labels):
     # 0 means OOD
     # 1 means ID
-    ood_labels = torch.zeros_like(test_labels)
-    ood_labels[torch.any(test_labels.reshape(-1,1).expand(-1,len(known_labels)) == known_labels, dim=1)] = 1
+    ood_labels = np.zeros_like(test_labels)
+    ood_labels[np.any(test_labels.reshape(-1,1) == known_labels, axis=1)] = 1
     return ood_labels
 
+def get_disk_mm(args, ds_size, support=True):
+
+    if not os.path.isdir("cache"):
+        os.makedirs("cache")
+
+    split = args.source if support else args.target
+    feats_cache_file = f"cache/{args.network}_{args.model}_{args.dataset}_{split}_feats.mmap"
+    logits_cache_file = f"cache/{args.network}_{args.model}_{args.dataset}_{split}_logits.mmap"
+    gts_cache_file = f"cache/{args.network}_{args.model}_{args.dataset}_{split}_gts.mmap"
+
+    if not os.path.isfile(feats_cache_file):
+        # we should create it 
+        feats_np = np.memmap(feats_cache_file, dtype=np.float32, mode='w+', shape=(ds_size, args.output_num))
+        logits_np = np.memmap(logits_cache_file, dtype=np.float32, mode='w+', shape=(ds_size, args.n_known_classes))
+        gts_np = np.memmap(gts_cache_file, dtype=int, mode='w+', shape=(ds_size,))
+        load = True
+    else:
+        feats_np = np.memmap(feats_cache_file, dtype=np.float32, mode='r', shape=(ds_size, args.output_num))
+        logits_np = np.memmap(logits_cache_file, dtype=np.float32, mode='r', shape=(ds_size, args.n_known_classes))
+        gts_np = np.memmap(gts_cache_file, dtype=int, mode='r', shape=(ds_size,))
+        load = False 
+
+    return feats_np, logits_np, gts_np, load 
+
 @torch.no_grad()
-def run_model(args, model, loader, device, contrastive=False):
+def run_model(args, model, loader, device, contrastive=False, support=True):
 
-    feats_list = []
-    logits_list = []
-    gt_list = []
+    assert (not args.on_disk or not args.distributed), "Cannot execute distributed eval with memory mapped vectors"
 
-    for images, target in tqdm(loader):
-        images = images.to(device)
-        if contrastive:
-            out, contrastive_feats = model(images, contrastive=True)
-            feats = contrastive_feats
-        else:
-            out, feats = model(images)
+    ds_size = len(loader.dataset)
+    batch_size = loader.batch_size
+    if args.on_disk:
+        feats_np, logits_np, gts_np, load = get_disk_mm(args, ds_size=ds_size, support=support)
+    else: 
+        feats_np = np.zeros(dtype=np.float32, shape=(ds_size, args.output_num))
+        logits_np = np.zeros(dtype=np.float32, shape=(ds_size, args.n_known_classes))
+        gts_np = np.zeros(dtype=int, shape=(ds_size,))
+        load = True
 
-        feats_list.append(feats.cpu())
-        gt_list.append(target)
-        logits_list.append(out.cpu())
+    if load:
+        for batch_idx, (images, target) in enumerate(tqdm(loader)):
+            images = images.to(device)
+            this_batch_size = len(images)
+            if contrastive:
+                out, contrastive_feats = model(images, contrastive=True)
+                feats = contrastive_feats
+            else:
+                out, feats = model(images)
 
-    logits_list, feats_list, gt_list = torch.cat(logits_list), torch.cat(feats_list), torch.cat(gt_list)
+            pos_start = batch_idx*batch_size
+            pos_end = batch_idx*batch_size+this_batch_size
+            feats_np[pos_start:pos_end] = feats.cpu().numpy()
+            logits_np[pos_start:pos_end] = out.cpu().numpy()
+            gts_np[pos_start:pos_end] = target.numpy()
+
 
     if args.distributed and args.n_gpus > 1: 
-        all_logits = all_gather(logits_list)
-        all_feats = all_gather(feats_list)
-        all_gt = all_gather(gt_list)
+        assert not args.on_disk, "Cannot execute distributed eval with memory mapped vectors"
+        all_logits = all_gather(logits_np)
+        all_feats = all_gather(feats_np)
+        all_gt = all_gather(gts_np)
 
-        logits_list = torch.cat([l for l in all_logits])
-        feats_list = torch.cat([l for l in all_feats])
-        gt_list = torch.cat([l for l in all_gt])
+        logits_list = np.concatenate([l for l in all_logits])
+        feats_list = np.concatenate([l for l in all_feats])
+        gt_list = np.concatenate([l for l in all_gt])
+
+    else:
+        logits_list, feats_list, gt_list = logits_np, feats_np, gts_np
 
     return logits_list, feats_list, gt_list
 
