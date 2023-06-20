@@ -4,12 +4,13 @@ import faiss
 from models.evaluators.common import prepare_ood_labels, calc_ood_metrics, run_model, closed_set_accuracy
 from models.common import normalize_feats
 import numpy as np
+from tqdm import tqdm
 
 def get_euclidean_normality_scores(test_features, prototypes):
     # normality scores computed as the opposite of the euclidean distance w.r.t. the nearest prototype
     print("Computing euclidean distances from prototypes")
     distances = []
-    for cls in range(prototypes.shape[0]):
+    for cls in tqdm(range(prototypes.shape[0])):
         distances.append(torch.from_numpy(np.linalg.norm(prototypes[cls]-test_features, axis=1)))
 
     test_dists = torch.stack(distances,1)
@@ -22,7 +23,7 @@ def get_cos_sim_normality_scores(test_features, prototypes):
     print("Computing cosine similarity distances from prototypes")
 
     similarities = []
-    for cls in range(prototypes.shape[0]):
+    for cls in tqdm(range(prototypes.shape[0])):
         similarity = (test_features * prototypes[cls]).sum(axis=1)
         similarities.append(torch.from_numpy(similarity))
 
@@ -37,7 +38,7 @@ def compute_prototypes(train_feats, train_lbls, normalize=False):
     classes = np.unique(train_lbls)
     prototypes = np.zeros((len(classes),train_feats.shape[1]))
 
-    for idx, cl in enumerate(classes):
+    for idx, cl in enumerate(tqdm(classes)):
         prt = train_feats[train_lbls == cl].mean(axis=0)
         prototypes[idx] = prt
 
