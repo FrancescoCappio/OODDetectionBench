@@ -61,7 +61,7 @@ def mahalanobis_evaluator(train_loader, test_loader, device, model):
             m_scores = np.concatenate((m_scores, m_score.reshape((m_score.shape[0], -1))), axis=1)
 
     m_scores = np.asarray(m_scores, dtype=np.float32).T
-    ood_labels = prepare_ood_labels(known_labels, test_labels)
+    ood_labels = prepare_ood_labels(known_labels.numpy(), test_labels.numpy())
 
     print(f"Num known: {ood_labels.sum()}. Num unknown: {len(test_labels) - ood_labels.sum()}.")
     for l in range(len(m_scores)):

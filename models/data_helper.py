@@ -59,7 +59,7 @@ def _dataset_info_standard(txt_labels, lbl_delta=0):
     return file_names, labels
 
 def _get_known_class_names(file_names, labels):
-    # extract name of known classes from paths of source samples
+    # extract name of known classes from paths of support samples
     # we expect path with structure:
     # /bla/bla/.../bla/class_name/image.jpg
     
@@ -95,24 +95,24 @@ class Dataset(data.Dataset):
 def get_eval_dataloader(args):
 
     dataset = args.dataset
-    target = "out_distribution" if args.target is None else args.target
-    source = "in_distribution" if args.source is None else args.source
+    test = "out_distribution" if args.test is None else args.test
+    support = "in_distribution" if args.support is None else args.support
 
     if not args.data_order == -1:
-        source = source + f"_o{args.data_order}"
-        target = target + f"_o{args.data_order}"
-    print(f"Dataset {dataset}, train_data: {source}, test_data: {target}")
+        support = support + f"_o{args.data_order}"
+        test = test + f"_o{args.data_order}"
+    print(f"Dataset {dataset}, train_data: {support}, test_data: {test}")
 
-    train_dataset_txt_path = join(PATH_TO_TXT, dataset, source + '.txt')
-    names_sources, labels_sources = _dataset_info_standard(train_dataset_txt_path)
+    train_dataset_txt_path = join(PATH_TO_TXT, dataset, support + '.txt')
+    names_supports, labels_supports = _dataset_info_standard(train_dataset_txt_path)
 
-    n_known_classes = len(set(labels_sources))
+    n_known_classes = len(set(labels_supports))
     # apply few shot subsampling if necessary
     if args.few_shot > 0: 
-        names_sources, labels_sources = few_shot_subsample(names_sources, labels_sources, n_shots=args.few_shot, seed=args.seed)
+        names_supports, labels_supports = few_shot_subsample(names_supports, labels_supports, n_shots=args.few_shot, seed=args.seed)
 
-    if dataset == "MCM_benchmarks" and source in ["Stanford-Cars", "CUB-200", "Oxford-Pet", "imagenet"]:
-        class_names_file = f"data/txt_lists/MCM_benchmarks/{source}_names.txt"
+    if dataset == "MCM_benchmarks" and support in ["Stanford-Cars", "CUB-200", "Oxford-Pet", "imagenet"]:
+        class_names_file = f"data/txt_lists/MCM_benchmarks/{support}_names.txt"
         print(f"Reading class names from: {class_names_file}")
 
         with open(class_names_file, "r") as f:
@@ -130,26 +130,26 @@ def get_eval_dataloader(args):
         known_class_names = [name.strip() for name in names]
     else: 
         print("Attempt to extract class names from file paths")
-        known_class_names = _get_known_class_names(names_sources, labels_sources)
+        known_class_names = _get_known_class_names(names_supports, labels_supports)
 
     known_class_names = known_class_names[:n_known_classes]
     print(f"Number of known_classes: {n_known_classes}")
     img_tr = get_val_transformer(args)
-    train_dataset = Dataset(names_sources, labels_sources, args.path_dataset, img_transformer=img_tr)
+    train_dataset = Dataset(names_supports, labels_supports, args.path_dataset, img_transformer=img_tr)
 
     if dataset == "MCM_benchmarks":
-        test_ID_txt_path = join(PATH_TO_TXT, dataset, source + "_test.txt")
-        test_OOD_txt_path = join(PATH_TO_TXT, dataset, target + ".txt")
+        test_ID_txt_path = join(PATH_TO_TXT, dataset, support + "_test.txt")
+        test_OOD_txt_path = join(PATH_TO_TXT, dataset, test + ".txt")
         names_test_ID, labels_test_ID = _dataset_info_standard(test_ID_txt_path)
         names_test_OOD, labels_test_OOD = _dataset_info_standard(test_OOD_txt_path, lbl_delta=n_known_classes)
-        names_target = names_test_ID + names_test_OOD
-        labels_target = labels_test_ID + labels_test_OOD
+        names_test = names_test_ID + names_test_OOD
+        labels_test = labels_test_ID + labels_test_OOD
 
     else:
-        test_dataset_txt_path = join(PATH_TO_TXT, dataset, target + '.txt')
-        names_target, labels_target = _dataset_info_standard(test_dataset_txt_path)
+        test_dataset_txt_path = join(PATH_TO_TXT, dataset, test + '.txt')
+        names_test, labels_test = _dataset_info_standard(test_dataset_txt_path)
 
-    test_dataset = Dataset(names_target, labels_target, args.path_dataset, img_transformer=img_tr)
+    test_dataset = Dataset(names_test, labels_test, args.path_dataset, img_transformer=img_tr)
 
     if args.distributed:
         test_distributed_sampler = DistributedSampler(dataset=test_dataset, shuffle=False)
@@ -166,20 +166,20 @@ def get_eval_dataloader(args):
 def get_train_dataloader(args):
 
     dataset = args.dataset
-    source = "in_distribution" if args.source is None else args.source
+    support = "in_distribution" if args.support is None else args.support
     if not args.data_order == -1:
-        source = source + f"_o{args.data_order}"
+        support = support + f"_o{args.data_order}"
 
-    print(f"Dataset {dataset}, train_data: {source}")
+    print(f"Dataset {dataset}, train_data: {support}")
 
-    train_dataset_txt_path = join(PATH_TO_TXT, dataset, source + '.txt')
+    train_dataset_txt_path = join(PATH_TO_TXT, dataset, support + '.txt')
 
-    names_sources, labels_sources = _dataset_info_standard(train_dataset_txt_path)
+    names_supports, labels_supports = _dataset_info_standard(train_dataset_txt_path)
     if args.few_shot > 0: 
-        names_sources, labels_sources = few_shot_subsample(names_sources, labels_sources, n_shots=args.few_shot, seed=args.seed)
+        names_supports, labels_supports = few_shot_subsample(names_supports, labels_supports, n_shots=args.few_shot, seed=args.seed)
 
     img_tr = get_train_transformer(args)
-    train_dataset = Dataset(names_sources, labels_sources, args.path_dataset, img_transformer=img_tr)
+    train_dataset = Dataset(names_supports, labels_supports, args.path_dataset, img_transformer=img_tr)
 
     drop_last = True
     if len(train_dataset) < args.train_batch_size:

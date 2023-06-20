@@ -5,17 +5,19 @@ from models.evaluators.common import run_model, prepare_ood_labels, calc_ood_met
 from models.evaluators.distance import compute_prototypes
 
 def resend_evaluator(args, train_loader, test_loader, device, model, batch_size=32):
-    train_logits, train_feats, train_lbls = run_model(args, model, train_loader, device)
-    test_logits, test_feats, test_lbls = run_model(args, model, test_loader, device)
+    train_logits, train_feats, train_lbls = run_model(args, model, train_loader, device, support=True)
+    test_logits, test_feats, test_lbls = run_model(args, model, test_loader, device, support=False)
 
     # known labels have 1 for known samples and 0 for unknown ones
-    known_labels = torch.unique(train_lbls)
+    known_labels = np.unique(train_lbls)
     n_known_classes = len(known_labels)
     prototypes = compute_prototypes(train_feats, train_lbls)
     ood_labels = prepare_ood_labels(known_labels, test_lbls)
 
     print(f"Num known: {ood_labels.sum()}. Num unknown: {len(test_lbls) - ood_labels.sum()}.")
     #TODO: implement memory checks
+    prototypes = torch.from_numpy(prototypes).float()
+    test_feats = torch.from_numpy(test_feats).float()
     prototypes = prototypes.to(device)
     test_feats = test_feats.to(device)
     predictions = torch.zeros((len(test_feats), len(prototypes)))

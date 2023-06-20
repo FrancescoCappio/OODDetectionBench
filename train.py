@@ -13,7 +13,13 @@ from models.resnet import get_resnet
 from models.data_helper import get_eval_dataloader, get_train_dataloader, split_train_loader, check_data_consistency
 from utils.log_utils import count_parameters, LogUnbuffered
 from utils.optim import LinearWarmupCosineAnnealingLR
+from utils.utils import clean_ckpt
 from models.evaluators import *
+
+try:
+    import wandb 
+except: 
+    pass
 
 def get_args():
     parser = argparse.ArgumentParser("OODDetectionBench")
@@ -26,10 +32,10 @@ def get_args():
                         choices=['DTD', 'DomainNet_Real', 'DomainNet_Painting', 'DomainNet_Sketch', 'Places', 
                                  'PACS_DG', 'PACS_SS_DG', 'imagenet_ood', 'imagenet_ood_small', 'DomainNet_DGv2',
                                  'MCM_benchmarks', 'PatternNet', 'SUN', 'ImageNet1k', "Stanford_Cars"])
-    parser.add_argument("--source",
-                        help="PACS_DG: no_ArtPainting, no_Cartoon, no_Photo, no_Sketch | PACS_SS_DG: Source")
-    parser.add_argument("--target",
-                        help="PACS_DG: ArtPainting, Cartoon, Photo, Sketch | PACS_SS_DG: ArtPainting, Cartoon, Photo")
+    parser.add_argument("--support",
+                        help="support split name")
+    parser.add_argument("--test",
+                        help="test split name")
     parser.add_argument("--data_order", type=int, default=-1, help="Which data order to use if more than one is available")
 
     # model parameters
@@ -72,6 +78,12 @@ def get_args():
     parser.add_argument("--output_dir", type=str, default="", help="Location for output checkpoints")
     parser.add_argument("--debug", action='store_true', default=False, help="Run in debug mode, disable file logger")
 
+    # save run on wandb 
+    parser.add_argument("--wandb", action='store_true', default=False, help="Save this run on wandb")
+
+    # performance options 
+    parser.add_argument("--on_disk", action='store_true', default=False, help="Save/Recover extracted features on the disk. To be used for really large ID datasets (e.g. ImageNet)")
+
     args = parser.parse_args()
     args.path_dataset = os.path.expanduser(args.path_dataset)
 
@@ -84,12 +96,12 @@ class Trainer:
         self.args.device = device
 
         # load the support and test set dataloaders 
-        self.target_loader, self.source_loader_test, known_class_names, n_known_classes = get_eval_dataloader(self.args)
+        self.target_loader, self.support_test_loader, known_class_names, n_known_classes = get_eval_dataloader(self.args)
         self.known_class_names = known_class_names
 
         if self.args.evaluator == "gram":
-            # this method needs a split of source data to be used as validation set 
-            self.source_loader_test, self.source_loader_val = split_train_loader(self.source_loader_test, args.seed)
+            # this method needs a split of support data to be used as validation set 
+            self.support_test_loader, self.support_val_loader = split_train_loader(self.support_test_loader, args.seed)
 
         self.n_known_classes = n_known_classes
         self.contrastive_enabled = False
@@ -124,6 +136,8 @@ class Trainer:
                 from models.common import WrapperWithContrastiveHead
                 base_model, self.output_num = get_resnet(self.args.network, n_known_classes=self.n_known_classes)
                 self.model = WrapperWithContrastiveHead(base_model, out_dim=self.output_num, contrastive_type=contrastive_type)
+                if not args.disable_contrastive_head:
+                    self.output_num = self.model.contrastive_out_dim
                 
                 # if ckpt fc size does not match current size discard it
                 if ckpt is not None: 
@@ -149,11 +163,12 @@ class Trainer:
             if self.args.model in ["CE", "DINO"]:
 
                 import timm
-                # we set num_classes to 0 in order to obtain pooled feats
-                model = timm.create_model("deit_base_patch16_224", pretrained=True, num_classes=0)
                 self.output_num = 768
 
                 if self.args.model == "DINO":
+                    # we set num_classes to 0 in order to obtain pooled feats
+                    model = timm.create_model("deit_base_patch16_224", pretrained=True, num_classes=0)
+
                     # if we didn't need the contrastive head we could use the model from huggingface:
                     # https://huggingface.co/facebook/dino-vitb16
                     self.contrastive_enabled = not args.disable_contrastive_head
@@ -161,8 +176,21 @@ class Trainer:
                     self.model = WrapperWithContrastiveHead(model, out_dim=self.output_num, contrastive_type="DINO", 
                                                             add_cls_head=True, n_classes=self.n_known_classes)
                 else:
-                    from models.common import WrapperWithFC
-                    model = WrapperWithFC(model, self.output_num, self.n_known_classes)
+                    import types 
+
+                    # we set num_classes to 0 in order to obtain pooled feats
+                    model = timm.create_model("deit_base_patch16_224", pretrained=True)
+                    model.fc = model.head
+
+                    if not self.n_known_classes == 1000:
+                        model.fc = nn.Linear(in_features=768, out_features=self.n_known_classes)
+
+                    def my_forward(self, x):
+                        feats = self.forward_head(self.forward_features(x), pre_logits=True)
+                        logits = self.fc(feats)
+                        return logits, feats
+
+                    model.forward = types.MethodType(my_forward, model)
                     self.model = model 
 
             elif self.args.model == "clip":
@@ -209,17 +237,19 @@ class Trainer:
 
             from models.resend import ReSeND
 
-            self.model = ReSeND()
+            self.model = ReSeND(n_known_classes=self.n_known_classes)
             self.output_num = self.model.output_num
         else:
             raise NotImplementedError(f"Network {self.args.network} not implemented")
 
         if ckpt is not None: 
             print(f"Loading checkpoint {self.args.checkpoint_path}")
-            missing, unexpected = self.model.load_state_dict(ckpt, strict=False)
+            missing, unexpected = self.model.load_state_dict(clean_ckpt(ckpt, self.model), strict=False)
             print(f"Missing keys: {missing}, unexpected keys: {unexpected}")
 
         self.to_device(self.device)
+        self.args.output_num = self.output_num
+        self.args.n_known_classes = self.n_known_classes
 
         if self.args.distributed:
             self.model = DDP(self.model, find_unused_parameters=True)
@@ -245,60 +275,60 @@ class Trainer:
         args = self.args
 
         if self.args.evaluator == "prototypes_distance":
-            metrics = prototypes_distance_evaluator(args, train_loader=self.source_loader_test, test_loader=self.target_loader,
+            metrics = prototypes_distance_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model, contrastive_head=self.contrastive_enabled,
                                                     cosine_sim=cosine_similarity)
         elif self.args.evaluator == "MSP":
-            metrics = MSP_evaluator(args, train_loader=self.source_loader_test, test_loader=self.target_loader,
+            metrics = MSP_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
 
         elif self.args.evaluator == "ODIN":
-            metrics = ODIN_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
+            metrics = ODIN_evaluator(train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
 
         elif self.args.evaluator == "energy":
-            metrics = energy_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
+            metrics = energy_evaluator(train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
 
         elif self.args.evaluator == "gradnorm":
-            metrics = gradnorm_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
+            metrics = gradnorm_evaluator(train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
 
         elif self.args.evaluator == "react":
-            metrics = react_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
+            metrics = react_evaluator(train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
 
         elif self.args.evaluator == "mahalanobis":
-            metrics = mahalanobis_evaluator(train_loader=self.source_loader_test, test_loader=self.target_loader,
+            metrics = mahalanobis_evaluator(train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
 
         elif self.args.evaluator == "gram":
             if self.args.only_eval:
                 print("The gram evaluator exploits cls predictions on train data to estimate statistics that are later used for computing normality scores.")
                 print("If the model is not finetuned the statistics will not be much relevant")
-            metrics = gram_evaluator(train_loader=self.source_loader_test, val_loader=self.source_loader_val, 
+            metrics = gram_evaluator(train_loader=self.support_test_loader, val_loader=self.support_val_loader, 
                                     test_loader=self.target_loader, device=self.device, model=self.model, finetuned=not self.args.only_eval)
 
         elif self.args.evaluator == "knn_ood":
-            metrics = knn_ood_evaluator(args, train_loader=self.source_loader_test, test_loader=self.target_loader,
+            metrics = knn_ood_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                         device=self.device, model=self.model, contrastive_head=self.contrastive_enabled, K=self.args.NNK)
 
         elif self.args.evaluator == "knn_distance":
-            metrics = knn_distance_evaluator(args, train_loader=self.source_loader_test, test_loader=self.target_loader,
+            metrics = knn_distance_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                             device=self.device, model=self.model, contrastive_head=self.contrastive_enabled, K=self.args.NNK,
                                             cosine_sim=cosine_similarity)
 
         elif self.args.evaluator == "linear_probe":
-            metrics = linear_probe_evaluator(args, train_loader=self.source_loader_test, test_loader=self.target_loader,
+            metrics = linear_probe_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                             device=self.device, model=self.model, contrastive_head=self.contrastive_enabled)
 
         elif self.args.evaluator == "MCM":
             assert self.args.model == "clip", "MCM evaluator supports only clip based models!"
-            metrics = MCM_evaluator(args, train_loader=self.source_loader_test, test_loader=self.target_loader,
+            metrics = MCM_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model, clip_model=self.clip_model, known_class_names=self.known_class_names)
 
         elif self.args.evaluator == "resend":
-            metrics = resend_evaluator(args,train_loader=self.source_loader_test, test_loader=self.target_loader,
+            metrics = resend_evaluator(args,train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
 
         else:
@@ -309,6 +339,10 @@ class Trainer:
 
         auroc = metrics["auroc"]
         fpr_auroc = metrics["fpr_at_95_tpr"]
+
+        if self.args.wandb:
+            wandb.log(metrics)
+
         print(f"Auroc,FPR95: {auroc:.4f},{fpr_auroc:.4f}")
 
     def save_ckpt(self, iteration):
@@ -326,10 +360,10 @@ class Trainer:
         train_loader = get_train_dataloader(self.args)
 
         if self.args.evaluator == "gram":
-            # this method needs a split of source data to be used as validation set 
+            # this method needs a split of support data to be used as validation set 
             train_loader, _ = split_train_loader(train_loader, self.args.seed)
 
-        check_data_consistency(train_loader, self.source_loader_test)
+        check_data_consistency(train_loader, self.support_test_loader)
 
         if self.args.epochs > 0: 
             iters_per_epoch = len(train_loader)
@@ -388,6 +422,10 @@ class Trainer:
                 train_acc = ((preds == labels).sum()/len(preds)).cpu().item()
                 current_lr = optimizer.param_groups[0]['lr']
                 print(f"Iterations: {it+1:6d}/{self.args.iterations}\t LR: {current_lr:6.4f}\t Loss: {avg_loss / log_period:6.4f} \t Acc: {train_acc:6.4f}")
+                if self.args.wandb:
+
+                    wandb.log({"lr": current_lr, "loss": avg_loss/log_period, "acc": train_acc}, step=self.args.iterations)
+
                 avg_loss = 0
 
             if (it+1) % ckpt_period == 0:
@@ -445,6 +483,16 @@ def main():
 
         sys.stdout = LogUnbuffered(args, orig_stdout, stdout_file)
         sys.stderr = LogUnbuffered(args, orig_stderr, stderr_file)
+
+    if args.wandb:
+        run_name=f"{args.network}_{args.model}_{args.evaluator}_{args.dataset}_{args.support}_{args.test}"
+        if not args.data_order == -1:
+            run_name += f"_{args.data_order}"
+
+        wandb.init(
+                project="OODDetectionFramework",
+                config=vars(args),
+                name=run_name)
 
     print("###############################################################################")
     print("######################### OOD Detection Benchmark #############################")

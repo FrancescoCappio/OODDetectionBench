@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+import numpy as np
 from tqdm import tqdm
 from models.evaluators.common import run_model, prepare_ood_labels, calc_ood_metrics, closed_set_accuracy
 
@@ -9,14 +10,15 @@ def MSP_evaluator(args, train_loader, test_loader, device, model):
 
     # first we extract features for target data
     train_lbls = train_loader.dataset.labels
-    test_logits, test_feats, test_lbls = run_model(args, model, test_loader, device)
+    test_logits, test_feats, test_lbls = run_model(args, model, test_loader, device, support=True)
 
     # known labels have 1 for known samples and 0 for unknown ones
-    known_labels = torch.unique(torch.tensor(train_lbls))
+    known_labels = np.unique(torch.tensor(train_lbls))
     ood_labels = prepare_ood_labels(known_labels, test_lbls)
 
     # closed set predictions
-    normality_scores, cs_preds = test_logits.max(dim=1)
+    cs_preds = test_logits.argmax(axis=1)
+    normality_scores = test_logits[np.arange(len(cs_preds)),cs_preds]
     known_mask = ood_labels == 1
     cs_acc = closed_set_accuracy(cs_preds[known_mask], test_lbls[known_mask])
 
