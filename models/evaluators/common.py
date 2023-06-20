@@ -85,12 +85,19 @@ def run_model(args, model, loader, device, contrastive=False, support=True):
 
 def calc_ood_metrics(test_normality_scores, ood_labels):
     num_known = (ood_labels == 1).sum()
+    num_unknown = len(test_normality_scores) - num_known
 
-    if num_known == len(test_normality_scores):
+    if num_unknown == 0:
         print("This dataset contains only known data")
-        return {"auroc": -1, "fpr_at_95_tpr": -1}
+        metrics = {"auroc": -1, "fpr_at_95_tpr": -1}
+    
+    else:
+        metrics = calc_metrics(test_normality_scores, ood_labels)
 
-    return calc_metrics(test_normality_scores, ood_labels)
+    metrics["num_known"] = num_known
+    metrics["num_unknown"] = num_unknown
+
+    return metrics
 
 def closed_set_accuracy(closed_set_preds, closed_set_lbls):
 
