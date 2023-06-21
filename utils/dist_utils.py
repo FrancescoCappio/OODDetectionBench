@@ -55,5 +55,5 @@ def all_gather(data):
 def is_main_process(args):
     if not args.distributed:
         return True
-    else
+    else:
         return args.global_rank == 0
