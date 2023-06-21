@@ -52,4 +52,8 @@ def all_gather(data):
 
     return data_list
 
-
+def is_main_process(args):
+    if not args.distributed:
+        return True
+    else
+        return args.global_rank == 0

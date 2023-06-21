@@ -17,7 +17,7 @@ def get_disk_mm(args, ds_size, support=True):
     if not os.path.isdir("cache"):
         os.makedirs("cache")
 
-    split = args.source if support else args.target
+    split = args.support if support else args.test
     feats_cache_file = f"cache/{args.network}_{args.model}_{args.dataset}_{split}_feats.mmap"
     logits_cache_file = f"cache/{args.network}_{args.model}_{args.dataset}_{split}_logits.mmap"
     gts_cache_file = f"cache/{args.network}_{args.model}_{args.dataset}_{split}_gts.mmap"

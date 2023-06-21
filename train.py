@@ -14,6 +14,7 @@ from models.data_helper import get_eval_dataloader, get_train_dataloader, split_
 from utils.log_utils import count_parameters, LogUnbuffered
 from utils.optim import LinearWarmupCosineAnnealingLR
 from utils.utils import clean_ckpt
+from utils.dist_utils import is_main_process
 from models.evaluators import *
 
 try:
@@ -341,7 +342,7 @@ class Trainer:
         auroc = metrics["auroc"]
         fpr_auroc = metrics["fpr_at_95_tpr"]
 
-        if self.args.wandb:
+        if self.args.wandb and is_main_process(self.args):
             wandb.log(metrics)
 
         print(f"Auroc,FPR95: {auroc:.4f},{fpr_auroc:.4f}")
@@ -425,7 +426,7 @@ class Trainer:
                 train_acc = ((preds == labels).sum()/len(preds)).cpu().item()
                 current_lr = optimizer.param_groups[0]['lr']
                 print(f"Iterations: {it+1:6d}/{self.args.iterations}\t LR: {current_lr:6.4f}\t Loss: {avg_loss / log_period:6.4f} \t Acc: {train_acc:6.4f}")
-                if self.args.wandb:
+                if self.args.wandb and is_main_process(self.args):
 
                     wandb.log({"lr": current_lr, "loss": avg_loss/log_period, "acc": train_acc}, step=self.args.iterations)
 
@@ -487,7 +488,7 @@ def main():
         sys.stdout = LogUnbuffered(args, orig_stdout, stdout_file)
         sys.stderr = LogUnbuffered(args, orig_stderr, stderr_file)
 
-    if args.wandb:
+    if args.wandb and is_main_process(args):
         run_name=f"{args.network}_{args.model}_{args.evaluator}_{args.dataset}_{args.support}_{args.test}"
         if not args.data_order == -1:
             run_name += f"_{args.data_order}"
