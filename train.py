@@ -428,7 +428,7 @@ class Trainer:
                 print(f"Iterations: {it+1:6d}/{self.args.iterations}\t LR: {current_lr:6.4f}\t Loss: {avg_loss / log_period:6.4f} \t Acc: {train_acc:6.4f}")
                 if self.args.wandb and is_main_process(self.args):
 
-                    wandb.log({"lr": current_lr, "loss": avg_loss/log_period, "acc": train_acc}, step=self.args.iterations)
+                    wandb.log({"lr": current_lr, "loss": avg_loss/log_period, "acc": train_acc}, step=it)
 
                 avg_loss = 0
 
