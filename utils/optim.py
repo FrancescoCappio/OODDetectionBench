@@ -66,6 +66,8 @@ class LinearWarmupCosineAnnealingLR(_LRScheduler):
         self.max_epochs = max_epochs
         self.warmup_start_lr = warmup_start_lr
         self.eta_min = eta_min
+        if self.warmup_epochs == 0:
+            self.warmup_start_lr = optimizer.param_groups[0]['lr']
 
         super().__init__(optimizer, last_epoch)
 

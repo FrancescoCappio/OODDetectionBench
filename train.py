@@ -66,6 +66,7 @@ def get_args():
     parser.add_argument("--warmup_epochs", type=int, default=-1, help="Number of lr warmup epochs, to use when train len specified with epochs")
     parser.add_argument("--freeze_backbone", action="store_true", default=False, help="Train only cls head during finetuning")
     parser.add_argument("--clip_grad", default=-1, type=float, help="If > 0 used as clip grad value")
+    parser.add_argument("--resume", default=False, action='store_true', help="Resume from last ckpt")
 
     # run params 
     parser.add_argument("--seed", type=int, default=42, help="Random seed for data splitting")
@@ -347,14 +348,38 @@ class Trainer:
 
         print(f"Auroc,FPR95: {auroc:.4f},{fpr_auroc:.4f}")
 
-    def save_ckpt(self, iteration):
+    def save_ckpt(self, iteration, optimizer=None, scheduler=None):
         if self.args.save_ckpt and (not self.args.distributed or self.args.global_rank == 0):
             save_model = self.model.module if self.args.distributed else self.model
             ckpt_path = join(self.args.output_dir, "model_last.pth")
             torch.save(save_model.state_dict(), ckpt_path)
-            with open(join(self.args.output_dir, "last_iter"), "w") as fout:
-                fout.write(f"{iteration}")
             print(f"Saved model to {ckpt_path}")
+
+            if optimizer is not None: 
+                aux_data = {}
+                aux_data['optimizer'] = optimizer.state_dict()
+                aux_data['scheduler'] = scheduler.state_dict()
+                aux_data['last_iter'] = iteration
+                aux_data_path = join(self.args.output_dir, "aux_data_last.pth")
+                torch.save(aux_data, aux_data_path)
+
+    def resume(self, optimizer, scheduler):
+        ckpt_path = join(self.args.output_dir, "model_last.pth")
+        aux_data_path = join(self.args.output_dir, "aux_data_last.pth")
+        if not (os.path.isfile(ckpt_path) and os.path.isfile(aux_data_path)):
+            return False, None, None, None
+
+        ckpt_state_dict = torch.load(ckpt_path, map_location=self.device)
+        if self.args.distributed:
+            self.model.module.load_state_dict(ckpt_state_dict, strict=True)
+        else:
+            self.model.load_state_dict(ckpt_state_dict, strict=True)
+
+        aux_data = torch.load(aux_data_path)
+        optimizer.load_state_dict(aux_data["optimizer"])
+        scheduler.load_state_dict(aux_data["scheduler"])
+        last_iter = aux_data['last_iter']
+        return True, optimizer, scheduler, last_iter
 
     def do_train(self):
         # prepare data 
@@ -390,6 +415,20 @@ class Trainer:
 
         optimizer = optim.SGD(optim_params, weight_decay=.0005, momentum=.9, lr=self.args.learning_rate)
         scheduler = LinearWarmupCosineAnnealingLR(optimizer, warmup_epochs=self.args.warmup_iters, max_epochs=self.args.iterations)
+
+        if self.args.resume:
+            resume_possible, resumed_optim, resumed_sched, resume_it = self.resume(optimizer, scheduler)
+            if not resume_possible:
+                print("Cannot resume, ckpt does not exist or is not complete")
+                start_it = 0
+            else:
+                optimizer = resumed_optim
+                scheduler = resumed_sched
+                start_it = resume_it + 1
+                print(f"Training resumed from it {start_it}")
+        else:
+            start_it = 0
+
         # loss function 
         loss_fn = nn.CrossEntropyLoss()
 
@@ -397,8 +436,8 @@ class Trainer:
         log_period = 10
         ckpt_period = 500
         avg_loss = 0
-        print(f"Start training, lr={self.args.learning_rate}, iterations={self.args.iterations}, warmup_iters={self.args.warmup_iters}")
-        for it in range(self.args.iterations):
+        print(f"Start training, lr={self.args.learning_rate}, start_iter={start_it}, iterations={self.args.iterations}, warmup_iters={self.args.warmup_iters}")
+        for it in range(start_it, self.args.iterations):
 
             try: 
                 batch = next(train_iter)
@@ -425,7 +464,7 @@ class Trainer:
                 _,preds = outputs.max(dim=1)
                 train_acc = ((preds == labels).sum()/len(preds)).cpu().item()
                 current_lr = optimizer.param_groups[0]['lr']
-                print(f"Iterations: {it+1:6d}/{self.args.iterations}\t LR: {current_lr:6.4f}\t Loss: {avg_loss / log_period:6.4f} \t Acc: {train_acc:6.4f}")
+                print(f"Iterations: {it+1:6d}/{self.args.iterations}\t LR: {current_lr:.6f}\t Loss: {avg_loss / log_period:6.4f} \t Acc: {train_acc:6.4f}")
                 if self.args.wandb and is_main_process(self.args):
 
                     wandb.log({"lr": current_lr, "loss": avg_loss/log_period, "acc": train_acc}, step=it)
@@ -433,7 +472,7 @@ class Trainer:
                 avg_loss = 0
 
             if (it+1) % ckpt_period == 0:
-                self.save_ckpt(it)
+                self.save_ckpt(it, optimizer, scheduler)
 
         # save final checkpoint 
         if self.args.save_ckpt and (not self.args.distributed or self.args.global_rank == 0):
@@ -472,9 +511,11 @@ def main():
         args.global_rank = int(environ['RANK'])
         print("Process rank", args.global_rank, "starting")
 
-    if args.output_dir and ((args.distributed and args.global_rank == 0) or not args.distributed):
-        assert not os.path.exists(args.output_dir), f"Output dir {args.output_dir} already exists, stopping to avoid overwriting"
-        os.makedirs(args.output_dir)
+    if args.output_dir and is_main_process(args):
+        if not args.resume:
+            assert not os.path.exists(args.output_dir), f"Output dir {args.output_dir} already exists, stopping to avoid overwriting"
+        if not os.path.exists(args.output_dir):
+            os.makedirs(args.output_dir)
         stdout_file = join(args.output_dir, "stdout.txt")
         stderr_file = join(args.output_dir, "stderr.txt")
     else:
