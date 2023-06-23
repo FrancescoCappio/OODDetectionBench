@@ -8,8 +8,15 @@ from utils.dist_utils import all_gather
 def prepare_ood_labels(known_labels, test_labels):
     # 0 means OOD
     # 1 means ID
-    ood_labels = np.zeros_like(test_labels)
-    ood_labels[np.any(test_labels.reshape(-1,1) == known_labels, axis=1)] = 1
+
+    if isinstance(known_labels, torch.Tensor) and isinstance(test_labels, torch.Tensor):
+        ood_labels = torch.zeros_like(test_labels)
+        ood_labels[torch.any(test_labels.reshape(-1,1).expand(-1,len(known_labels)) == known_labels, dim=1)] = 1
+    elif isinstance(known_labels, np.ndarray) and isinstance(test_labels, np.ndarray):
+        ood_labels = np.zeros_like(test_labels)
+        ood_labels[np.any(test_labels.reshape(-1,1) == known_labels, axis=1)] = 1
+    else:
+        raise NotImplementedError("Unknown type for labels")
     return ood_labels
 
 def get_disk_mm(args, ds_size, support=True):
@@ -18,9 +25,14 @@ def get_disk_mm(args, ds_size, support=True):
         os.makedirs("cache")
 
     split = args.support if support else args.test
-    feats_cache_file = f"cache/{args.network}_{args.model}_{args.dataset}_{split}_feats.mmap"
-    logits_cache_file = f"cache/{args.network}_{args.model}_{args.dataset}_{split}_logits.mmap"
-    gts_cache_file = f"cache/{args.network}_{args.model}_{args.dataset}_{split}_gts.mmap"
+    base_name = f"cache/{args.network}_{args.model}_{args.dataset}_{split}"
+
+    if args.checkpoint_path:
+        base_name += "_" + args.checkpoint_path.replace("/", "_")
+
+    feats_cache_file = f"{base_name}_feats.mmap"
+    logits_cache_file = f"{base_name}_logits.mmap"
+    gts_cache_file = f"{base_name}_gts.mmap"
 
     if not os.path.isfile(feats_cache_file):
         # we should create it 

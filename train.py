@@ -298,7 +298,7 @@ class Trainer:
                                                     device=self.device, model=self.model)
 
         elif self.args.evaluator == "react":
-            metrics = react_evaluator(train_loader=self.support_test_loader, test_loader=self.target_loader,
+            metrics = react_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
 
         elif self.args.evaluator == "mahalanobis":
