@@ -10,7 +10,7 @@ def MSP_evaluator(args, train_loader, test_loader, device, model):
 
     # first we extract features for target data
     train_lbls = train_loader.dataset.labels
-    test_logits, test_feats, test_lbls = run_model(args, model, test_loader, device, support=True)
+    test_logits, test_feats, test_lbls = run_model(args, model, test_loader, device, support=False)
 
     # known labels have 1 for known samples and 0 for unknown ones
     known_labels = np.unique(torch.tensor(train_lbls))
