@@ -43,7 +43,7 @@ def get_args():
     parser.add_argument("--network", type=str, default="resnet101", choices=["resnet101", "vit", "resend", 
                                                                              "resnetv2_101x3"])
     parser.add_argument("--model", type=str, default="CE", choices=["CE", "simclr", "supclr", "cutmix", "CSI", "supCSI", "clip", "DINO", 
-                                                                    "resend", "DINOv2", "BiT", "CE-IM22k", "random_init"])
+                                                                    "resend", "DINOv2", "BiT", "CE-IM22k", "random_init", "CE-IM21k"])
     parser.add_argument("--evaluator", type=str, help="Strategy to compute normality scores", default="prototypes_distance",
                         choices=["prototypes_distance", "MSP", "ODIN", "energy", "gradnorm", "mahalanobis", "gram", "knn_distance",
                                  "linear_probe", "MCM", "knn_ood", "resend", "react"])
@@ -213,7 +213,7 @@ class Trainer:
                 self.output_num = 1024
                 self.model = WrapperWithFC(dinov2_vitb14, self.output_num, self.n_known_classes)
 
-            elif self.args.model == "CE-IM22k":
+            elif self.args.model == "CE-IM22k" or self.args.model == "CE-IM21k":
                 # https://huggingface.co/google/vit-large-patch16-224-in21k
                 from transformers import ViTModel
                 model = ViTModel.from_pretrained('google/vit-large-patch16-224-in21k')
@@ -374,6 +374,7 @@ class Trainer:
             self.model.module.load_state_dict(ckpt_state_dict, strict=True)
         else:
             self.model.load_state_dict(ckpt_state_dict, strict=True)
+        del ckpt_state_dict
 
         aux_data = torch.load(aux_data_path)
         optimizer.load_state_dict(aux_data["optimizer"])

@@ -190,10 +190,10 @@ def _estimate_react_thres(args, model, loader, device, id_percentile=0.9):
 
     _, feats, _ = run_model(args, model, loader, device, support=True)
 
-    id_activations = feats.flatten()
-    thres = np.percentile(id_activations, id_percentile * 100)
+    feats = feats.flatten()
+    feats = np.percentile(feats, id_percentile * 100) # thres, use same var name to reduce memory usage
      
-    return thres
+    return feats
 
 @torch.no_grad()
 def _iterate_data_react(model, loader, device, threshold=1, energy_temper=1):
