@@ -376,7 +376,7 @@ class Trainer:
             self.model.load_state_dict(ckpt_state_dict, strict=True)
         del ckpt_state_dict
 
-        aux_data = torch.load(aux_data_path)
+        aux_data = torch.load(aux_data_path, map_location=self.device)
         optimizer.load_state_dict(aux_data["optimizer"])
         scheduler.load_state_dict(aux_data["scheduler"])
         last_iter = aux_data['last_iter']
