@@ -58,9 +58,9 @@ def run_model(args, model, loader, device, contrastive=False, support=True):
     if args.on_disk:
         feats_np, logits_np, gts_np, load = get_disk_mm(args, ds_size=ds_size, support=support)
     else: 
-        feats_np = np.zeros(dtype=np.float32, shape=(ds_size, args.output_num))
-        logits_np = np.zeros(dtype=np.float32, shape=(ds_size, args.n_known_classes))
-        gts_np = np.zeros(dtype=int, shape=(ds_size,))
+        feats_np = -np.ones(dtype=np.float32, shape=(ds_size, args.output_num))
+        logits_np = -np.ones(dtype=np.float32, shape=(ds_size, args.n_known_classes))
+        gts_np = -np.ones(dtype=int, shape=(ds_size,))
         load = True
 
     if load:
@@ -82,10 +82,11 @@ def run_model(args, model, loader, device, contrastive=False, support=True):
 
     if args.distributed and args.n_gpus > 1: 
         assert not args.on_disk, "Cannot execute distributed eval with memory mapped vectors"
-        all_logits = all_gather(logits_np)
-        all_feats = all_gather(feats_np)
-        all_gt = all_gather(gts_np)
-
+        mask = gts_np >= 0
+        all_logits = all_gather(logits_np[mask])
+        all_feats = all_gather(feats_np[mask])
+        all_gt = all_gather(gts_np[mask])
+        
         logits_list = np.concatenate([l for l in all_logits])
         feats_list = np.concatenate([l for l in all_feats])
         gt_list = np.concatenate([l for l in all_gt])
