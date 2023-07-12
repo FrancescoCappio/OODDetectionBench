@@ -4,8 +4,12 @@ import numpy as np
 from tqdm import tqdm
 from models.evaluators.common import run_model, prepare_ood_labels, calc_ood_metrics, closed_set_accuracy
 
+def np_softmax(logits, axis=1):
+    exp_scores = np.exp(logits)
+    return exp_scores/np.sum(exp_scores, axis=axis, keepdims=True)
+
 @torch.no_grad()
-def MSP_evaluator(args, train_loader, test_loader, device, model): 
+def MSP_evaluator(args, train_loader, test_loader, device, model, disable_softmax=False): 
     # implements ICLR 2017 https://openreview.net/forum?id=Hkg4TI9xl
 
     # first we extract features for target data
@@ -18,6 +22,11 @@ def MSP_evaluator(args, train_loader, test_loader, device, model):
 
     # closed set predictions
     cs_preds = test_logits.argmax(axis=1)
+
+    # with softmax disabled we have MLS
+    if not disable_softmax:
+        test_logits = np_softmax(test_logits)
+
     normality_scores = test_logits[np.arange(len(cs_preds)),cs_preds]
     known_mask = ood_labels == 1
     cs_acc = closed_set_accuracy(cs_preds[known_mask], test_lbls[known_mask])
@@ -28,6 +37,11 @@ def MSP_evaluator(args, train_loader, test_loader, device, model):
     metrics["cs_acc"] = cs_acc
 
     return metrics 
+
+@torch.no_grad()
+def MLS_evaluator(args, train_loader, test_loader, device, model): 
+    # implements MLS from ICLR 2022 https://openreview.net/forum?id=5hLP5JY9S2d
+    return MSP_evaluator(args, train_loader, test_loader, device, model, disable_softmax=True)
 
 def _iterate_data_odin(model, data_loader, device):
     # values *verified* from original paper (should be validated on val OOD data)

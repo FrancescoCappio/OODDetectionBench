@@ -45,7 +45,7 @@ def get_args():
     parser.add_argument("--model", type=str, default="CE", choices=["CE", "simclr", "supclr", "cutmix", "CSI", "supCSI", "clip", "DINO", 
                                                                     "resend", "DINOv2", "BiT", "CE-IM22k", "random_init", "CE-IM21k"])
     parser.add_argument("--evaluator", type=str, help="Strategy to compute normality scores", default="prototypes_distance",
-                        choices=["prototypes_distance", "MSP", "ODIN", "energy", "gradnorm", "mahalanobis", "gram", "knn_distance",
+                        choices=["prototypes_distance", "MSP", "MLS", "ODIN", "energy", "gradnorm", "mahalanobis", "gram", "knn_distance",
                                  "linear_probe", "MCM", "knn_ood", "resend", "react"])
 
     # evaluators-specific parameters 
@@ -284,7 +284,9 @@ class Trainer:
         elif self.args.evaluator == "MSP":
             metrics = MSP_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
-
+        elif self.args.evaluator == "MLS":
+            metrics = MLS_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
+                                                    device=self.device, model=self.model)
         elif self.args.evaluator == "ODIN":
             metrics = ODIN_evaluator(train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
