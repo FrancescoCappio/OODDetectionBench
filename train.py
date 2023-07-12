@@ -178,6 +178,9 @@ class Trainer:
                     from models.common import WrapperWithContrastiveHead
                     self.model = WrapperWithContrastiveHead(model, out_dim=self.output_num, contrastive_type="DINO", 
                                                             add_cls_head=True, n_classes=self.n_known_classes)
+                    if not args.disable_contrastive_head:
+                        self.output_num = self.model.contrastive_out_dim
+
                 else:
                     import types 
 
