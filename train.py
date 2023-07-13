@@ -57,6 +57,7 @@ def get_args():
     parser.add_argument("--train_batch_size", type=int, default=64, help="Batch size for training data loader")
     parser.add_argument("--eval_batch_size", type=int, default=16, help="Batch size for test data loaders")
     parser.add_argument("--few_shot", type=int, default=-1, help="Number of training samples for each class, -1 means use whole dataset")
+    parser.add_argument("--rand_augment", action="store_true", default=False, help="Use RandAugment strategy for data augmentation")
 
     # finetuning params 
     parser.add_argument("--iterations", type=int, default=100, help="Number of finetuning iterations")
@@ -67,6 +68,8 @@ def get_args():
     parser.add_argument("--freeze_backbone", action="store_true", default=False, help="Train only cls head during finetuning")
     parser.add_argument("--clip_grad", default=-1, type=float, help="If > 0 used as clip grad value")
     parser.add_argument("--resume", default=False, action='store_true', help="Resume from last ckpt")
+
+    parser.add_argument("--label_smoothing", type=float, default=0, help="Label smoothing for loss computation")
 
     # run params 
     parser.add_argument("--seed", type=int, default=42, help="Random seed for data splitting")
@@ -436,7 +439,7 @@ class Trainer:
             start_it = 0
 
         # loss function 
-        loss_fn = nn.CrossEntropyLoss()
+        loss_fn = nn.CrossEntropyLoss(label_smoothing=self.args.label_smoothing)
 
         train_iter = iter(train_loader)
         log_period = 10
