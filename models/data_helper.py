@@ -232,12 +232,16 @@ def get_train_transformer(args):
 
     img_tr.append(transforms.RandomResizedCrop((int(args.image_size), int(args.image_size)), (min_scale, max_scale)))
 
-    if random_horiz_flip > 0.0:
-        img_tr.append(transforms.RandomHorizontalFlip(random_horiz_flip))
-    if jitter > 0.0:
-        img_tr.append(transforms.ColorJitter(brightness=jitter, contrast=jitter, saturation=jitter,hue=min(0.5, jitter)))
-    if random_grayscale:
-        img_tr.append(transforms.RandomGrayscale(random_grayscale))
+    if args.rand_augment:
+        print("Using RandAugment")
+        img_tr.append(transforms.RandAugment(num_ops=2, magnitude=9))
+    else:
+        if random_horiz_flip > 0.0:
+            img_tr.append(transforms.RandomHorizontalFlip(random_horiz_flip))
+        if jitter > 0.0:
+            img_tr.append(transforms.ColorJitter(brightness=jitter, contrast=jitter, saturation=jitter,hue=min(0.5, jitter)))
+        if random_grayscale:
+            img_tr.append(transforms.RandomGrayscale(random_grayscale))
 
     img_tr = img_tr + [transforms.ToTensor(), 
                         transforms.Normalize(norm_stats["mean"], std=norm_stats["std"])]
