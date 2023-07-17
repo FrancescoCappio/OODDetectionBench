@@ -8,6 +8,7 @@ import torch
 from torch import nn, optim
 from torch.nn.parallel import DistributedDataParallel as DDP 
 import torch.distributed as dist
+from torch.distributed.elastic.multiprocessing.errors import record
 
 from models.resnet import get_resnet
 from models.data_helper import get_eval_dataloader, get_train_dataloader, split_train_loader, check_data_consistency
@@ -489,6 +490,7 @@ class Trainer:
 
         optimizer.zero_grad()
 
+@record
 def main():
     args = get_args()
 
