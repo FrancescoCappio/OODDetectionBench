@@ -6,6 +6,26 @@ from models.common import normalize_feats
 import numpy as np
 from tqdm import tqdm
 
+from utils.log_utils import CompProfiler
+
+def get_euclidean_normality_scores_profiling(test_features, prototypes):
+    # normality scores computed as the opposite of the euclidean distance w.r.t. the nearest prototype
+    print("Computing euclidean distances from prototypes")
+    profiler = CompProfiler()
+    all_dists = np.zeros((len(test_features),len(prototypes)))
+
+    for test_id, test_feats in enumerate(tqdm(test_features)):
+        for proto_id, proto in enumerate(prototypes):
+            profiler.start()
+            dist = np.linalg.norm(proto-test_feats)
+            profiler.end()
+            all_dists[test_id][proto_id] = dist
+
+    print(profiler)
+    test_scores, test_predictions = torch.from_numpy(all_dists).min(dim=1)
+    
+    return 1 - test_scores, test_predictions
+
 def get_euclidean_normality_scores(test_features, prototypes):
     # normality scores computed as the opposite of the euclidean distance w.r.t. the nearest prototype
     print("Computing euclidean distances from prototypes")
@@ -65,7 +85,10 @@ def prototypes_distance_evaluator(args, train_loader, test_loader, device, model
     if cosine_sim:
         test_normality_scores, test_predictions = get_cos_sim_normality_scores(test_feats, prototypes)
     else:
-        test_normality_scores, test_predictions = get_euclidean_normality_scores(test_feats, prototypes)
+        if args.profile:
+            test_normality_scores, test_predictions = get_euclidean_normality_scores_profiling(test_feats, prototypes)
+        else:
+            test_normality_scores, test_predictions = get_euclidean_normality_scores(test_feats, prototypes)
 
     known_mask = ood_labels == 1
     cs_acc = closed_set_accuracy(test_predictions[known_mask], test_lbls[known_mask])

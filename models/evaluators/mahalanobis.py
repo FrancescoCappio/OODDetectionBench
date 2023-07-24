@@ -3,8 +3,9 @@ import numpy as np
 from tqdm import tqdm
 
 from models.evaluators.common import prepare_ood_labels, calc_ood_metrics
+from utils.log_utils import CompProfiler
 
-def mahalanobis_evaluator(train_loader, test_loader, device, model):
+def mahalanobis_evaluator(args, train_loader, test_loader, device, model):
     # implements neurips 2018: https://papers.nips.cc/paper/2018/hash/abdeb6f575ac5c6676b747bca8d09cc2-Abstract.html
 
     # the mahalanobis distance is computed not for a single network layer, but for a 
@@ -18,7 +19,7 @@ def mahalanobis_evaluator(train_loader, test_loader, device, model):
     # them mean features, but for the covariance computation 
     # we normalize each sample's features using the mean of its class. By doing this we 
     # move all class clusters around the origin and build a single cluster
-    # then we estimate the features covariance 
+    # for which we estimate the features covariance 
 
     # original code print results for different noise magnitudes. We inherit the magnitude from ODIN
     epsilon = 0.001
@@ -53,7 +54,8 @@ def mahalanobis_evaluator(train_loader, test_loader, device, model):
                 precision=precision,
                 layer_index=i, 
                 magnitude=magnitude,
-                device=device)
+                device=device,
+                profile=args.profile)
         m_score = np.asarray(m_score, dtype=np.float32)
         if i == 0:
             m_scores = m_score.reshape((m_score.shape[0], -1))
@@ -150,7 +152,7 @@ def sample_estimator(model, num_classes, feature_list, train_loader, device):
 
     return sample_class_mean, precision
 
-def get_Mahalanobis_score(model, test_loader, num_classes, net_type, sample_mean, precision, layer_index, magnitude, device):
+def get_Mahalanobis_score(model, test_loader, num_classes, net_type, sample_mean, precision, layer_index, magnitude, device, profile=False):
     '''
     Compute the proposed Mahalanobis confidence score on input dataset
     return: Mahalanobis score from layer_index
@@ -167,12 +169,18 @@ def get_Mahalanobis_score(model, test_loader, num_classes, net_type, sample_mean
     '''
     mahalanobis = []
     gt_labels = []
+    if profile:
+        test_loader = test_loader.dataset
+        profiler = CompProfiler()
         
     for batch in tqdm(test_loader):
         data, target = batch
+        if profile:
+            data = data.unsqueeze(0)
+            target = torch.tensor(target).unsqueeze(0)
         gt_labels.append(target)
         
-        data, target = data.to(device), target.to(device)
+        data = data.to(device)
         data.requires_grad = True
         
         out_features = model_intermediate_forward(model, data, layer_index)
@@ -181,8 +189,12 @@ def get_Mahalanobis_score(model, test_loader, num_classes, net_type, sample_mean
         gaussian_score = 0
         for i in range(num_classes):
             batch_sample_mean = sample_mean[layer_index][i]
+            if profile:
+                profiler.start()
             zero_f = out_features - batch_sample_mean
             term_gau = -0.5*torch.mm(torch.mm(zero_f, precision[layer_index]), zero_f.t()).diag()
+            if profile:
+                profiler.end()
             if i == 0:
                 gaussian_score = term_gau.view(-1,1)
             else:
@@ -219,8 +231,12 @@ def get_Mahalanobis_score(model, test_loader, num_classes, net_type, sample_mean
         noise_gaussian_score = 0
         for i in range(num_classes):
             batch_sample_mean = sample_mean[layer_index][i]
+            if profile:
+                profiler.start()
             zero_f = noise_out_features.data - batch_sample_mean
             term_gau = -0.5*torch.mm(torch.mm(zero_f, precision[layer_index]), zero_f.t()).diag()
+            if profile:
+                profiler.end()
             if i == 0:
                 noise_gaussian_score = term_gau.view(-1,1)
             else:
@@ -228,5 +244,8 @@ def get_Mahalanobis_score(model, test_loader, num_classes, net_type, sample_mean
 
         noise_gaussian_score, _ = torch.max(noise_gaussian_score, dim=1)
         mahalanobis.extend(noise_gaussian_score.cpu().numpy())
+
+    if profile:
+        print(profiler)
         
     return mahalanobis, torch.cat(gt_labels)

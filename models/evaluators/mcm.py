@@ -2,6 +2,9 @@ import torch
 import clip
 from models.evaluators.common import prepare_ood_labels, calc_ood_metrics, run_model, closed_set_accuracy
 from models.common import normalize_feats
+from utils.log_utils import CompProfiler
+import numpy as np
+from tqdm import tqdm
 
 @torch.no_grad()
 def MCM_evaluator(args, train_loader, test_loader, model, clip_model, device, known_class_names): 
@@ -31,7 +34,21 @@ def MCM_evaluator(args, train_loader, test_loader, model, clip_model, device, kn
     test_feats = torch.from_numpy(test_feats).to(device).half()
 
     # compute the cos sim
-    cos_sim_logits = torch.matmul(test_feats, concept_prototypes.T)
+    if args.profile:
+        profiler = CompProfiler()
+        test_feats = test_feats.cpu().numpy()
+        concept_prototypes = concept_prototypes.cpu().numpy()
+        cos_sim_logits = np.zeros((len(test_feats),len(concept_prototypes)))
+        for test_id, test_f in enumerate(tqdm(test_feats)):
+            for proto_id, proto in enumerate(concept_prototypes):
+                profiler.start()
+                dist = (test_f*proto).sum()
+                profiler.end()
+                cos_sim_logits[test_id][proto_id] = dist
+        print(profiler)
+        cos_sim_logits = torch.from_numpy(cos_sim_logits)
+    else:
+        cos_sim_logits = torch.matmul(test_feats, concept_prototypes.T)
 
     # apply softmax with temperature
     probs = cos_sim_logits.type(torch.float).softmax(dim=-1).cpu()

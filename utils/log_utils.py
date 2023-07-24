@@ -1,3 +1,4 @@
+import time 
 
 def count_parameters(model):
     total_params = 0
@@ -41,3 +42,23 @@ class LogUnbuffered:
         if self.out_file:
             self.out_file.close()
 
+
+class CompProfiler:
+    """A profiler to estimate time necessary to perform a comparison with a given evaluator
+    """
+
+    def __init__(self):
+        self.comps_count = 0
+        self.total_time = 0
+
+    def start(self):
+        """Mark start of comparison"""
+        self.start_time = time.time()
+
+    def end(self):
+        """Mark end of comparison"""
+        self.total_time += time.time() - self.start_time
+        self.comps_count += 1
+
+    def __str__(self):
+        return f"Total comps {self.comps_count}, Total comp time {self.total_time}. Average comparison time {self.total_time/self.comps_count}"

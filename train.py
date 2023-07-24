@@ -86,6 +86,7 @@ def get_args():
 
     # performance options 
     parser.add_argument("--on_disk", action='store_true', default=False, help="Save/Recover extracted features on the disk. To be used for really large ID datasets (e.g. ImageNet)")
+    parser.add_argument("--profile", action='store_true', default=False, help="Compute and print average comparison time during eval")
 
     args = parser.parse_args()
     args.path_dataset = os.path.expanduser(args.path_dataset)
@@ -307,7 +308,7 @@ class Trainer:
                                                     device=self.device, model=self.model)
 
         elif self.args.evaluator == "mahalanobis":
-            metrics = mahalanobis_evaluator(train_loader=self.support_test_loader, test_loader=self.target_loader,
+            metrics = mahalanobis_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
 
         elif self.args.evaluator == "gram":
