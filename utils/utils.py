@@ -42,6 +42,7 @@ def trunc_normal_(tensor, mean=0., std=1., a=-2., b=2.):
     # type: (Tensor, float, float, float, float) -> Tensor
     return _no_grad_trunc_normal_(tensor, mean, std, a, b)
 
+
 def clean_ckpt(ckpt, model):
     new_dict = {}
     model_dict = model.state_dict()
@@ -52,3 +53,18 @@ def clean_ckpt(ckpt, model):
         else:
             new_dict[k] = ckpt[k]
     return new_dict
+
+
+def get_aux_modules_dict(optimizer, scheduler):
+    """
+    Wrap optimizers and schedulers in a dict to save and load checkpoints
+    """
+    aux_modules = {}
+    for module_type, module in zip(["optimizer", "scheduler"], [optimizer, scheduler]):
+        # module can be a dict of modules; in this case, flatten it
+        if isinstance(module, dict):
+            for k, v in module.items():
+                aux_modules[f"{module_type}_{k}"] = v
+        else:
+            aux_modules[module_type] = module
+    return aux_modules

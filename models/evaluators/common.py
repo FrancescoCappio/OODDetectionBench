@@ -49,7 +49,7 @@ def get_disk_mm(args, ds_size, support=True):
     return feats_np, logits_np, gts_np, load 
 
 @torch.no_grad()
-def run_model(args, model, loader, device, contrastive=False, support=True):
+def run_model(args, model, loader, device, open_hybrid=False, contrastive=False, support=True):
 
     assert (not args.on_disk or not args.distributed), "Cannot execute distributed eval with memory mapped vectors"
 
@@ -58,7 +58,7 @@ def run_model(args, model, loader, device, contrastive=False, support=True):
     if args.on_disk:
         feats_np, logits_np, gts_np, load = get_disk_mm(args, ds_size=ds_size, support=support)
     else: 
-        feats_np = -np.ones(dtype=np.float32, shape=(ds_size, args.output_num))
+        feats_np = -np.ones(dtype=np.float32, shape=((ds_size, args.output_num) if not open_hybrid else (ds_size,)))
         logits_np = -np.ones(dtype=np.float32, shape=(ds_size, args.n_known_classes))
         gts_np = -np.ones(dtype=int, shape=(ds_size,))
         load = True
@@ -67,7 +67,10 @@ def run_model(args, model, loader, device, contrastive=False, support=True):
         for batch_idx, (images, target) in enumerate(tqdm(loader)):
             images = images.to(device)
             this_batch_size = len(images)
-            if contrastive:
+            if open_hybrid:
+                out, lls = model(images)
+                feats = lls.squeeze()  # just for compatibility
+            elif contrastive:
                 out, contrastive_feats = model(images, contrastive=True)
                 feats = contrastive_feats
             else:

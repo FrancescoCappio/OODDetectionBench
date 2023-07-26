@@ -4,6 +4,7 @@ import sys
 from os.path import join
 from os import environ
 
+import numpy as np
 import torch
 from torch import nn, optim
 from torch.nn.parallel import DistributedDataParallel as DDP 
@@ -14,7 +15,7 @@ from models.resnet import get_resnet
 from models.data_helper import get_eval_dataloader, get_train_dataloader, split_train_loader, check_data_consistency
 from utils.log_utils import count_parameters, LogUnbuffered
 from utils.optim import LinearWarmupCosineAnnealingLR
-from utils.utils import clean_ckpt
+from utils.utils import clean_ckpt, get_aux_modules_dict
 from utils.dist_utils import is_main_process
 from models.evaluators import *
 
@@ -44,10 +45,10 @@ def get_args():
     parser.add_argument("--network", type=str, default="resnet101", choices=["resnet101", "vit", "resend", 
                                                                              "resnetv2_101x3"])
     parser.add_argument("--model", type=str, default="CE", choices=["CE", "simclr", "supclr", "cutmix", "CSI", "supCSI", "clip", "DINO", 
-                                                                    "resend", "DINOv2", "BiT", "CE-IM22k", "random_init", "CE-IM21k"])
+                                                                    "resend", "DINOv2", "BiT", "CE-IM22k", "random_init", "CE-IM21k", "OpenHybrid"])
     parser.add_argument("--evaluator", type=str, help="Strategy to compute normality scores", default="prototypes_distance",
                         choices=["prototypes_distance", "MSP", "MLS", "ODIN", "energy", "gradnorm", "mahalanobis", "gram", "knn_distance",
-                                 "linear_probe", "MCM", "knn_ood", "resend", "react"])
+                                 "linear_probe", "MCM", "knn_ood", "resend", "react", "OpenHybrid"])
 
     # evaluators-specific parameters 
     parser.add_argument("--NNK", help="K value to use for Knn distance evaluator", type=int, default=1)
@@ -69,6 +70,8 @@ def get_args():
     parser.add_argument("--freeze_backbone", action="store_true", default=False, help="Train only cls head during finetuning")
     parser.add_argument("--clip_grad", default=-1, type=float, help="If > 0 used as clip grad value")
     parser.add_argument("--resume", default=False, action='store_true', help="Resume from last ckpt")
+    parser.add_argument("--cls_lr_multiplier", type=int, default=100, help="LR multiplier for classification head optimizer (only used in OpenHybrid)")
+    parser.add_argument("--flow_update_freq", type=int, default=2, help="Period of steps to follow for flow module updates (only used in OpenHybrid)")
 
     parser.add_argument("--label_smoothing", type=float, default=0, help="Label smoothing for loss computation")
 
@@ -163,6 +166,16 @@ class Trainer:
                 from models.common import WrapperWithFC
                 self.output_num = 512
                 self.model = WrapperWithFC(model.visual, self.output_num, self.n_known_classes, half_precision=True)
+
+            elif self.args.model == "OpenHybrid":
+                assert self.args.evaluator == "OpenHybrid", f"Unsupported evaluator {self.args.evaluator} for OpenHybrid model"
+
+                from models.open_hybrid import OpenHybrid
+
+                encoder, self.output_num = get_resnet(self.args.network, n_known_classes=None)
+                cls_hidden_dim = self.output_num // 2
+                self.model = OpenHybrid(encoder, latent_dim=self.output_num, cls_hidden_dim=cls_hidden_dim, num_classes=self.n_known_classes)
+                
             else:
                 raise NotImplementedError(f"Model {self.args.model} is not supported with network {self.args.network}")
 
@@ -261,8 +274,9 @@ class Trainer:
         self.args.output_num = self.output_num
         self.args.n_known_classes = self.n_known_classes
 
+        self.raw_model = self.model # maintain access to the "raw" internal module in case of DDP
         if self.args.distributed:
-            self.model = DDP(self.model, find_unused_parameters=True)
+            self.model = DDP(self.raw_model, find_unused_parameters=True)
 
         print("Number of parameters: ", count_parameters(self.model))
 
@@ -343,6 +357,10 @@ class Trainer:
             metrics = resend_evaluator(args,train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
 
+        elif self.args.evaluator == "OpenHybrid":
+            metrics = open_hybrid_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader, device=self.device,
+                                            model=self.model)
+
         else:
             raise NotImplementedError(f"Unknown evaluator {self.args.evaluator}")
 
@@ -357,39 +375,71 @@ class Trainer:
 
         print(f"Auroc,FPR95: {auroc:.4f},{fpr_auroc:.4f}")
 
-    def save_ckpt(self, iteration, optimizer=None, scheduler=None):
+    def save_ckpt(self, aux_modules=None, iteration=None):
         if self.args.save_ckpt and (not self.args.distributed or self.args.global_rank == 0):
-            save_model = self.model.module if self.args.distributed else self.model
             ckpt_path = join(self.args.output_dir, "model_last.pth")
-            torch.save(save_model.state_dict(), ckpt_path)
+            torch.save(self.raw_model.state_dict(), ckpt_path)
             print(f"Saved model to {ckpt_path}")
 
-            if optimizer is not None: 
-                aux_data = {}
-                aux_data['optimizer'] = optimizer.state_dict()
-                aux_data['scheduler'] = scheduler.state_dict()
-                aux_data['last_iter'] = iteration
+            if aux_modules:
+                assert iteration is not None, "Specify iteration when saving additional modules"
+                aux_data = {module_name: module.state_dict() for module_name, module in aux_modules.items()}
+                aux_data["last_iter"] = iteration
                 aux_data_path = join(self.args.output_dir, "aux_data_last.pth")
                 torch.save(aux_data, aux_data_path)
 
-    def resume(self, optimizer, scheduler):
+    def resume(self, aux_modules):
         ckpt_path = join(self.args.output_dir, "model_last.pth")
         aux_data_path = join(self.args.output_dir, "aux_data_last.pth")
         if not (os.path.isfile(ckpt_path) and os.path.isfile(aux_data_path)):
-            return False, None, None, None
+            return False, None
 
         ckpt_state_dict = torch.load(ckpt_path, map_location=self.device)
-        if self.args.distributed:
-            self.model.module.load_state_dict(ckpt_state_dict, strict=True)
-        else:
-            self.model.load_state_dict(ckpt_state_dict, strict=True)
+        self.raw_model.load_state_dict(ckpt_state_dict, strict=True)
         del ckpt_state_dict
 
         aux_data = torch.load(aux_data_path, map_location=self.device)
-        optimizer.load_state_dict(aux_data["optimizer"])
-        scheduler.load_state_dict(aux_data["scheduler"])
-        last_iter = aux_data['last_iter']
-        return True, optimizer, scheduler, last_iter
+        for module_name, module in aux_modules.items():
+            module.load_state_dict(aux_data[module_name])
+        last_iter = aux_data["last_iter"]
+        return True, last_iter
+
+    def get_train_log_fn(self, loss_divider):
+        def get_suffixes(name):
+            return (f"({name}) ", f"_{name}") if name else (" ", "")
+
+        def do_logging(it, optimizer, running_losses, train_acc):
+            if not isinstance(optimizer, dict): # wrap in dict
+                optimizer = {"": optimizer}
+            wandb_data = {}
+            log_msg = [f"Iterations: {it+1:6d}/{self.args.iterations}"]
+            # LR
+            msg = ""
+            for name, optim_ in optimizer.items():
+                current_lr = optim_.param_groups[0]["lr"]
+                log_suffix, wandb_suffix = get_suffixes(name)
+                msg += f"{current_lr:.6f}{log_suffix}"
+                wandb_data[f"lr{wandb_suffix}"] = current_lr
+            log_msg.append(f"LR: {msg}")
+            # Loss
+            msg = ""
+            for name, loss_ in running_losses.items():
+                avg_loss = loss_ / loss_divider
+                log_suffix, wandb_suffix = get_suffixes(name)
+                msg += f"{avg_loss:6.4f}{log_suffix}"
+                wandb_data[f"loss{wandb_suffix}"] = avg_loss
+            log_msg.append(f"Loss: {msg}")
+            # Acc
+            log_msg.append(f"Acc: {train_acc:6.4f}")
+            wandb_data["acc"] = train_acc
+
+            print(*log_msg, sep="\t")
+            
+            if self.args.wandb and is_main_process(self.args):
+                wandb.log(wandb_data, step=it)
+
+        return do_logging
+
 
     def do_train(self):
         # prepare data 
@@ -413,27 +463,35 @@ class Trainer:
             self.args.learning_rate *= self.args.n_gpus
         self.to_train()
 
-        # prepare optimizer 
-        optim_params = self.model.parameters()
-        if self.args.freeze_backbone:
-            if hasattr(self.model, "fc"):
-                optim_params = self.model.fc.parameters()
-            elif hasattr(self.model, "base_model") and hasattr(self.model.base_model, "fc"):
-                optim_params = self.model.base_model.fc.parameters()
-            else:
-                raise NotImplementedError("Don't know how to access fc")
-
-        optimizer = optim.SGD(optim_params, weight_decay=.0005, momentum=.9, lr=self.args.learning_rate)
-        scheduler = LinearWarmupCosineAnnealingLR(optimizer, warmup_epochs=self.args.warmup_iters, max_epochs=self.args.iterations)
+        # prepare optimizer
+        if self.args.model == "OpenHybrid":
+            optimizer = {"cls": optim.SGD(self.raw_model.classifier.parameters(), weight_decay=.0005, momentum=.9,
+                                          lr=self.args.cls_lr_multiplier * self.args.learning_rate)}
+            for name, model in zip(["enc", "flow"], [self.raw_model.encoder, self.raw_model.flow_module]):
+                optimizer[name] = optim.Adam(model.parameters(), lr=self.args.learning_rate)
+            scheduler = {
+                name: LinearWarmupCosineAnnealingLR(optim_, warmup_epochs=self.args.warmup_iters, max_epochs=self.args.iterations)
+                for name, optim_ in optimizer.items()
+            }
+        else:
+            optim_params = self.model.parameters()
+            if self.args.freeze_backbone:
+                if hasattr(self.model, "fc"):
+                    optim_params = self.model.fc.parameters()
+                elif hasattr(self.model, "base_model") and hasattr(self.model.base_model, "fc"):
+                    optim_params = self.model.base_model.fc.parameters()
+                else:
+                    raise NotImplementedError("Don't know how to access fc")
+            optimizer = optim.SGD(optim_params, weight_decay=.0005, momentum=.9, lr=self.args.learning_rate)
+            scheduler = LinearWarmupCosineAnnealingLR(optimizer, warmup_epochs=self.args.warmup_iters, max_epochs=self.args.iterations)
 
         if self.args.resume:
-            resume_possible, resumed_optim, resumed_sched, resume_it = self.resume(optimizer, scheduler)
+            aux_modules = get_aux_modules_dict(optimizer, scheduler)
+            resume_possible, resume_it = self.resume(aux_modules)
             if not resume_possible:
                 print("Cannot resume, ckpt does not exist or is not complete")
                 start_it = 0
             else:
-                optimizer = resumed_optim
-                scheduler = resumed_sched
                 start_it = resume_it + 1
                 print(f"Training resumed from it {start_it}")
         else:
@@ -445,8 +503,14 @@ class Trainer:
         train_iter = iter(train_loader)
         log_period = 10
         ckpt_period = 500
-        avg_loss = 0
+        running_loss = {"cls": 0}
+        if self.args.model == "OpenHybrid":
+            running_loss["flow"] = 0
+
+        train_log_fn = self.get_train_log_fn(log_period)
+
         print(f"Start training, lr={self.args.learning_rate}, start_iter={start_it}, iterations={self.args.iterations}, warmup_iters={self.args.warmup_iters}")
+
         for it in range(start_it, self.args.iterations):
 
             try: 
@@ -458,37 +522,59 @@ class Trainer:
             images, labels = batch 
             images = images.to(self.device)
             labels = labels.to(self.device)
-            outputs, feats = self.model(images)
 
-            loss = loss_fn(outputs, labels)
+            if self.args.model == "OpenHybrid": 
+                outputs, ll = self.model(images)
+                loss_cls = loss_fn(outputs, labels)
+                loss_flow = -torch.mean(ll) / np.prod(self.raw_model.flow_input_size) / np.log(2)    # compute bpd
+                loss = loss_cls + loss_flow
+                for optim_ in optimizer.values():
+                    optim_.zero_grad()
+                loss.backward()
+                modules_to_update = []
+                modules_to_update.append("enc")
+                modules_to_update.append("cls")
+                if it % self.args.flow_update_freq == 0:
+                    modules_to_update.append("flow")
+                    if self.args.flow_update_freq > 1:
+                        with torch.no_grad():
+                            for p in self.raw_model.flow_module.parameters():
+                                if p.grad is not None:
+                                    p.grad /= self.args.flow_update_freq
+                    nn.utils.clip_grad.clip_grad_norm_(self.raw_model.flow_module.parameters(), 1.)
+                    self.raw_model.update_lipschitz()
+                for module in modules_to_update:
+                    optimizer[module].step()
+                for sched_ in scheduler.values():
+                    sched_.step()
+                running_loss["cls"] += loss_cls.item()
+                running_loss["flow"] += loss_flow.item()
+            else:
+                outputs, _ = self.model(images)
+                loss = loss_fn(outputs, labels)
+                optimizer.zero_grad()
+                loss.backward()
+                if self.args.clip_grad > 0:
+                    torch.nn.utils.clip_grad_value_(self.model.parameters(), self.args.clip_grad)
+                optimizer.step()
+                scheduler.step()
+                running_loss["cls"] += loss.item()
 
-            optimizer.zero_grad()
-            loss.backward()
-            if self.args.clip_grad > 0:
-                torch.nn.utils.clip_grad_value_(self.model.parameters(), self.args.clip_grad)
-            optimizer.step()
-            scheduler.step()
-
-            avg_loss += loss.item()
             if (it+1) % log_period == 0:
-                _,preds = outputs.max(dim=1)
+                _, preds = outputs.max(dim=1)
                 train_acc = ((preds == labels).sum()/len(preds)).cpu().item()
-                current_lr = optimizer.param_groups[0]['lr']
-                print(f"Iterations: {it+1:6d}/{self.args.iterations}\t LR: {current_lr:.6f}\t Loss: {avg_loss / log_period:6.4f} \t Acc: {train_acc:6.4f}")
-                if self.args.wandb and is_main_process(self.args):
-
-                    wandb.log({"lr": current_lr, "loss": avg_loss/log_period, "acc": train_acc}, step=it)
-
-                avg_loss = 0
+                train_log_fn(it, optimizer, running_loss, train_acc)
+                for loss_name in running_loss:
+                    running_loss[loss_name] = 0
 
             if (it+1) % ckpt_period == 0:
-                self.save_ckpt(it, optimizer, scheduler)
+                aux_modules = get_aux_modules_dict(optimizer, scheduler)
+                self.save_ckpt(aux_modules, it)
 
         # save final checkpoint 
         if self.args.save_ckpt and (not self.args.distributed or self.args.global_rank == 0):
-            self.save_ckpt(self.args.iterations)
+            self.save_ckpt()
 
-        optimizer.zero_grad()
 
 @record
 def main():

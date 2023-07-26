@@ -5,3 +5,4 @@ from .gram import gram_evaluator
 from .linear_probe import linear_probe_evaluator
 from .mcm import MCM_evaluator
 from .resend import resend_evaluator
+from .open_hybrid import open_hybrid_evaluator
