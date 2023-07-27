@@ -142,7 +142,11 @@ class RelationalTransformer(nn.Module):
             for i in range(depth)])
         self.norm = norm_layer(embed_dim)
 
-        self.head = nn.Linear(self.embed_dim, num_classes) if num_classes > 0 else nn.Identity()
+        self.head = nn.Sequential(
+                    nn.Linear(self.embed_dim, 256),
+                    nn.ReLU(),
+                    nn.Linear(256, num_classes, bias=False) if num_classes > 0 else nn.Identity()
+                )
         self.init_weights()
 
     def init_weights(self, mode=''):
