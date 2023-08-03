@@ -15,14 +15,14 @@ def linear_probe_evaluator(args, train_loader, test_loader, device, model, contr
 
     # Perform logistic regression
     classifier = LogisticRegression(random_state=0, C=0.316, max_iter=1000, solver='liblinear')
-    classifier.fit(train_feats.numpy(), train_lbls.numpy())
+    classifier.fit(train_feats, train_lbls)
     # Evaluate on the target features
-    pred_prob = classifier.predict_proba(test_feats.numpy()) # get the softmax probability for each class
+    pred_prob = classifier.predict_proba(test_feats) # get the softmax probability for each class
     # Get the maximum softmax probability
     max_pred_prob = np.amax(pred_prob, axis=1)
 
     # known labels have 1 for known samples and 0 for unknown ones
-    known_labels = torch.unique(train_lbls)
+    known_labels = np.unique(train_lbls)
     ood_labels = prepare_ood_labels(known_labels, test_lbls)
 
     # closed set predictions

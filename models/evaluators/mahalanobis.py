@@ -75,10 +75,6 @@ def model_feature_list(model, x):
     logits, feats = model(x)
     return logits, [feats]
 
-# function to extract a specific feature
-def model_intermediate_forward(model, x, layer_index):
-    return model(x)[1]
-
 def sample_estimator(model, num_classes, feature_list, train_loader, device):
     """
     compute sample mean and precision (inverse of covariance)
@@ -175,7 +171,7 @@ def get_Mahalanobis_score(model, test_loader, num_classes, net_type, sample_mean
         data, target = data.to(device), target.to(device)
         data.requires_grad = True
         
-        out_features = model_intermediate_forward(model, data, layer_index)
+        out_features = model(data)[1]
         
         # compute Mahalanobis score
         gaussian_score = 0
@@ -214,7 +210,7 @@ def get_Mahalanobis_score(model, test_loader, num_classes, net_type, sample_mean
         tempInputs = tempInputs.detach()
  
         # perform forward again 
-        noise_out_features = model_intermediate_forward(model, tempInputs, layer_index)
+        noise_out_features = model(tempInputs)[1]
 
         noise_gaussian_score = 0
         for i in range(num_classes):
