@@ -47,7 +47,7 @@ def get_args():
                                                                     "resend", "DINOv2", "BiT", "CE-IM22k", "random_init", "CE-IM21k"])
     parser.add_argument("--evaluator", type=str, help="Strategy to compute normality scores", default="prototypes_distance",
                         choices=["prototypes_distance", "MSP", "MLS", "ODIN", "energy", "gradnorm", "mahalanobis", "gram", "knn_distance",
-                                 "linear_probe", "MCM", "knn_ood", "resend", "react", "flow"])
+                                 "linear_probe", "MCM", "knn_ood", "resend", "react", "flow", "EVM"])
 
     # evaluators-specific parameters 
     parser.add_argument("--NNK", help="K value to use for Knn distance evaluator", type=int, default=1)
@@ -361,6 +361,10 @@ class Trainer:
 
         elif self.args.evaluator == "linear_probe":
             metrics = linear_probe_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
+                                            device=self.device, model=self.model, contrastive_head=self.contrastive_enabled)
+
+        elif self.args.evaluator == "EVM":
+            metrics = EVM_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                             device=self.device, model=self.model, contrastive_head=self.contrastive_enabled)
 
         elif self.args.evaluator == "MCM":
