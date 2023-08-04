@@ -1,7 +1,24 @@
 import pickle
 import torch
 import torch.distributed as dist
+import os
 
+def get_max_cpu_count():
+    if hasattr(os, 'sched_getaffinity'):
+        try:
+            max_num_worker_suggest = len(os.sched_getaffinity(0))
+            cpuset_checked = True
+        except Exception:
+            pass
+    if max_num_worker_suggest is None:
+        # os.cpu_count() could return Optional[int]
+        # get cpu count first and check None in order to satify mypy check
+        cpu_count = os.cpu_count()
+        if cpu_count is not None:
+            max_num_worker_suggest = cpu_count
+    if max_num_worker_suggest is None:
+        return 1
+    return max_num_worker_suggest
 
 def get_world_size():
     if not dist.is_available():
