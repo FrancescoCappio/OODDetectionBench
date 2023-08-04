@@ -1,6 +1,7 @@
 import torch 
 import numpy as np
 from models.evaluators.common import prepare_ood_labels, calc_ood_metrics, run_model, closed_set_accuracy
+from utils.dist_utils import get_max_cpu_count
 
 @torch.no_grad()
 def EVM_evaluator(args, train_loader, test_loader, device, model, contrastive_head=False): 
@@ -20,10 +21,11 @@ def EVM_evaluator(args, train_loader, test_loader, device, model, contrastive_he
     train_classes = [train_feats[train_lbls == lbl] for lbl in known_labels]
     # create and train the classifier 
     mevm = EVM.MultipleEVM(tailsize=len(train_feats), distance_function=scipy.spatial.distance.euclidean)
-    mevm.train(train_classes)
+    workers = get_max_cpu_count()
+    mevm.train(train_classes, parallel=workers)
     
     # estimate probabilities for test data
-    pred_prob, indices = mevm.max_probabilities(test_feats)
+    pred_prob, indices = mevm.max_probabilities(test_feats, parallel=workers)
     pred_prob = np.array(pred_prob)
     cs_preds = np.stack(indices)[:,0]
     cs_preds[pred_prob==0] = len(known_labels)
