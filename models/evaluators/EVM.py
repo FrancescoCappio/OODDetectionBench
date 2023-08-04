@@ -7,21 +7,20 @@ from utils.dist_utils import get_max_cpu_count
 def EVM_evaluator(args, train_loader, test_loader, device, model, contrastive_head=False): 
     # this evaluator defines an Extreme Value Classifier and use it to estimate the normality of a given test sample 
     # ref paper: http://doi.org/10.1109/TPAMI.2017.2707495
-    print("Running EVM evaluator")
+    workers = get_max_cpu_count()
+    print(f"Running EVM evaluator with {workers} worker(s)")
     import EVM
-    import scipy
 
     # first we extract features for both support and test data
-    train_logits, train_feats, train_lbls = run_model(args, model, train_loader, device, contrastive=contrastive_head, support=True)
-    test_logits, test_feats, test_lbls = run_model(args, model, test_loader, device, contrastive=contrastive_head, support=False)
+    _, train_feats, train_lbls = run_model(args, model, train_loader, device, contrastive=contrastive_head, support=True)
+    _, test_feats, test_lbls = run_model(args, model, test_loader, device, contrastive=contrastive_head, support=False)
 
     # we need to divide train sample by class 
     known_labels = np.unique(train_lbls)
     known_labels.sort()
     train_classes = [train_feats[train_lbls == lbl] for lbl in known_labels]
     # create and train the classifier 
-    mevm = EVM.MultipleEVM(tailsize=len(train_feats), distance_function=scipy.spatial.distance.euclidean)
-    workers = get_max_cpu_count()
+    mevm = EVM.MultipleEVM(tailsize=len(train_feats))
     mevm.train(train_classes, parallel=workers)
     
     # estimate probabilities for test data
