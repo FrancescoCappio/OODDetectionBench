@@ -45,7 +45,7 @@ def get_args():
     parser.add_argument("--network", type=str, default="resnet101", choices=["resnet101", "vit", "resend", 
                                                                              "resnetv2_101x3"])
     parser.add_argument("--model", type=str, default="CE", choices=["CE", "simclr", "supclr", "cutmix", "CSI", "supCSI", "clip", "DINO", 
-                                                                    "resend", "DINOv2", "BiT", "CE-IM22k", "random_init", "CE-IM21k", "OpenHybrid"])
+                                                                    "resend", "DINOv2", "BiT", "CE-IM22k", "random_init", "CE-IM21k", "OpenHybrid_rf", "OpenHybrid_dn"])
     parser.add_argument("--evaluator", type=str, help="Strategy to compute normality scores", default="prototypes_distance",
                         choices=["prototypes_distance", "MSP", "MLS", "ODIN", "energy", "gradnorm", "mahalanobis", "gram", "knn_distance",
                                  "linear_probe", "MCM", "knn_ood", "resend", "react", "OpenHybrid"])
@@ -70,8 +70,11 @@ def get_args():
     parser.add_argument("--freeze_backbone", action="store_true", default=False, help="Train only cls head during finetuning")
     parser.add_argument("--clip_grad", default=-1, type=float, help="If > 0 used as clip grad value")
     parser.add_argument("--resume", default=False, action='store_true', help="Resume from last ckpt")
+
+    # OpenHybrid
     parser.add_argument("--cls_lr_multiplier", type=int, default=100, help="LR multiplier for classification head optimizer (only used in OpenHybrid)")
     parser.add_argument("--flow_update_freq", type=int, default=2, help="Period of steps to follow for flow module updates (only used in OpenHybrid)")
+    parser.add_argument("--enc_update", type=str, choices=["always", "cls", "flow"], default="always", help="Tie encoder updates to another module (only used in OpenHybrid)")
 
     parser.add_argument("--label_smoothing", type=float, default=0, help="Label smoothing for loss computation")
 
@@ -167,14 +170,20 @@ class Trainer:
                 self.output_num = 512
                 self.model = WrapperWithFC(model.visual, self.output_num, self.n_known_classes, half_precision=True)
 
-            elif self.args.model == "OpenHybrid":
+            elif self.args.model.startswith("OpenHybrid_"):
                 assert self.args.evaluator == "OpenHybrid", f"Unsupported evaluator {self.args.evaluator} for OpenHybrid model"
 
                 from models.open_hybrid import OpenHybrid
 
                 encoder, self.output_num = get_resnet(self.args.network, n_known_classes=None)
                 cls_hidden_dim = self.output_num // 2
-                self.model = OpenHybrid(encoder, latent_dim=self.output_num, cls_hidden_dim=cls_hidden_dim, num_classes=self.n_known_classes)
+                if self.args.model == "OpenHybrid_rf":
+                    flow_module = "resflow"
+                elif self.args.model == "OpenHybrid_dn":
+                    flow_module = "differnet"
+                else:
+                    raise RuntimeError(f"Unknown model {self.args.model}")
+                self.model = OpenHybrid(encoder, latent_dim=self.output_num, cls_hidden_dim=cls_hidden_dim, num_classes=self.n_known_classes, flow_module=flow_module)
                 
             else:
                 raise NotImplementedError(f"Model {self.args.model} is not supported with network {self.args.network}")
@@ -442,6 +451,9 @@ class Trainer:
 
 
     def do_train(self):
+        if self.args.model.startswith("OpenHybrid_"):
+            from models.open_hybrid import flow_update_context
+
         # prepare data 
         
         train_loader = get_train_dataloader(self.args)
@@ -464,7 +476,7 @@ class Trainer:
         self.to_train()
 
         # prepare optimizer
-        if self.args.model == "OpenHybrid":
+        if self.args.model.startswith("OpenHybrid_"):
             optimizer = {"cls": optim.SGD(self.raw_model.classifier.parameters(), weight_decay=.0005, momentum=.9,
                                           lr=self.args.cls_lr_multiplier * self.args.learning_rate)}
             for name, model in zip(["enc", "flow"], [self.raw_model.encoder, self.raw_model.flow_module]):
@@ -504,7 +516,7 @@ class Trainer:
         log_period = 10
         ckpt_period = 500
         running_loss = {"cls": 0}
-        if self.args.model == "OpenHybrid":
+        if self.args.model.startswith("OpenHybrid_"):
             running_loss["flow"] = 0
 
         train_log_fn = self.get_train_log_fn(log_period)
@@ -523,32 +535,33 @@ class Trainer:
             images = images.to(self.device)
             labels = labels.to(self.device)
 
-            if self.args.model == "OpenHybrid": 
-                outputs, ll = self.model(images)
-                loss_cls = loss_fn(outputs, labels)
-                loss_flow = -torch.mean(ll) / np.prod(self.raw_model.flow_input_size) / np.log(2)    # compute bpd
-                loss = loss_cls + loss_flow
+            if self.args.model.startswith("OpenHybrid_"): 
                 for optim_ in optimizer.values():
                     optim_.zero_grad()
-                loss.backward()
-                modules_to_update = []
-                modules_to_update.append("enc")
-                modules_to_update.append("cls")
+                # classification
+                update_enc = (self.args.enc_update != "flow")
+                outputs = self.model(images, flow=False, enc_grad=update_enc)
+                loss_cls = loss_fn(outputs, labels)
+                running_loss["cls"] += loss_cls.item()
+                loss_cls.backward()
+                optimizer["cls"].step()
+                if update_enc:
+                    optimizer["enc"].step()
+                    optimizer["enc"].zero_grad()
+                # flow
                 if it % self.args.flow_update_freq == 0:
-                    modules_to_update.append("flow")
-                    if self.args.flow_update_freq > 1:
-                        with torch.no_grad():
-                            for p in self.raw_model.flow_module.parameters():
-                                if p.grad is not None:
-                                    p.grad /= self.args.flow_update_freq
-                    nn.utils.clip_grad.clip_grad_norm_(self.raw_model.flow_module.parameters(), 1.)
-                    self.raw_model.update_lipschitz()
-                for module in modules_to_update:
-                    optimizer[module].step()
+                    update_enc = (self.args.enc_update != "cls")
+                    ll = self.model(images, classify=False, enc_grad=update_enc)
+                    loss_flow = -torch.mean(ll) / self.raw_model.latent_dim / np.log(2)    # compute bpd
+                    running_loss["flow"] += loss_flow.item()
+                    loss_flow.backward()
+                    with flow_update_context(self.raw_model.flow_module, self.args.flow_update_freq):
+                        optimizer["flow"].step()
+                        if update_enc:
+                            optimizer["enc"].step()
+                # schedulers
                 for sched_ in scheduler.values():
                     sched_.step()
-                running_loss["cls"] += loss_cls.item()
-                running_loss["flow"] += loss_flow.item()
             else:
                 outputs, _ = self.model(images)
                 loss = loss_fn(outputs, labels)
