@@ -70,13 +70,12 @@ def get_args():
     parser.add_argument("--freeze_backbone", action="store_true", default=False, help="Train only cls head during finetuning")
     parser.add_argument("--clip_grad", default=-1, type=float, help="If > 0 used as clip grad value")
     parser.add_argument("--resume", default=False, action='store_true', help="Resume from last ckpt")
+    parser.add_argument("--label_smoothing", type=float, default=0, help="Label smoothing for loss computation")
 
     # OpenHybrid
     parser.add_argument("--cls_lr_multiplier", type=int, default=100, help="LR multiplier for classification head optimizer (only used in OpenHybrid)")
     parser.add_argument("--flow_update_freq", type=int, default=2, help="Period of steps to follow for flow module updates (only used in OpenHybrid)")
     parser.add_argument("--enc_update", type=str, choices=["always", "cls", "flow"], default="always", help="Tie encoder updates to another module (only used in OpenHybrid)")
-
-    parser.add_argument("--label_smoothing", type=float, default=0, help="Label smoothing for loss computation")
 
     # run params 
     parser.add_argument("--seed", type=int, default=42, help="Random seed for data splitting")
@@ -90,6 +89,7 @@ def get_args():
     parser.add_argument("--save_ckpt", action='store_true', default=False, help="Should save the training output checkpoint to --output_dir?")
     parser.add_argument("--output_dir", type=str, default="", help="Location for output checkpoints")
     parser.add_argument("--debug", action='store_true', default=False, help="Run in debug mode, disable file logger")
+    parser.add_argument("--print_args", action='store_true', default=False, help="Print args to stdout")
 
     # save run on wandb 
     parser.add_argument("--wandb", action='store_true', default=False, help="Save this run on wandb")
@@ -648,6 +648,9 @@ def main():
                 project="OODDetectionFramework",
                 config=vars(args),
                 name=run_name)
+    
+    if args.print_args:
+        print(args)
 
     print("###############################################################################")
     print("######################### OOD Detection Benchmark #############################")
