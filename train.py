@@ -96,6 +96,9 @@ def get_args():
 
     # performance options 
     parser.add_argument("--on_disk", action='store_true', default=False, help="Save/Recover extracted features on the disk. To be used for really large ID datasets (e.g. ImageNet)")
+    
+    # run name
+    parser.add_argument("--suffix", type=str, default="", help="Additional suffix for the run name")
 
     args = parser.parse_args()
     args.path_dataset = os.path.expanduser(args.path_dataset)
@@ -629,6 +632,8 @@ def main():
         print("Process rank", args.global_rank, "starting")
 
     if args.output_dir and is_main_process(args):
+        if args.suffix:
+            args.output_dir += f"_{args.suffix}"
         if not args.resume:
             assert not os.path.exists(args.output_dir), f"Output dir {args.output_dir} already exists, stopping to avoid overwriting"
         if not os.path.exists(args.output_dir):
@@ -650,6 +655,8 @@ def main():
         run_name=f"{args.network}_{args.model}_{args.evaluator}_{args.dataset}_{args.support}_{args.test}"
         if not args.data_order == -1:
             run_name += f"_{args.data_order}"
+        if args.suffix:
+            run_name += f"_{args.suffix}"
 
         wandb.init(
                 project="OODDetectionFramework",
