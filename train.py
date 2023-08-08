@@ -184,6 +184,13 @@ class Trainer:
                 else:
                     raise RuntimeError(f"Unknown model {self.args.model}")
                 self.model = OpenHybrid(encoder, latent_dim=self.output_num, cls_hidden_dim=cls_hidden_dim, num_classes=self.n_known_classes, flow_module=flow_module)
+
+                # if ckpt fc size does not match current size discard it
+                if ckpt is not None: 
+                    old_size = ckpt["classifier.2.bias"].shape[0]
+                    if not old_size == self.n_known_classes:
+                        del ckpt["classifier.2.weight"]
+                        del ckpt["classifier.2.bias"]
                 
             else:
                 raise NotImplementedError(f"Model {self.args.model} is not supported with network {self.args.network}")
