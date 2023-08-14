@@ -27,7 +27,7 @@ class ResidualFlow(nn.Module):
         init_layer=None,
         actnorm=False,
         fc_actnorm=False,
-        batchnorm=True,
+        batchnorm=True, # False in original ResFlow
         dropout=0,
         fc=True,
         coeff=0.98,
@@ -174,6 +174,20 @@ class ResidualFlow(nn.Module):
                 else:
                     z, logpz = self.transforms[idx].inverse(z, logpz)
             return z if logpz is None else (z, logpz)
+
+    @torch.no_grad()
+    def update_lipschitz(self):
+        for m in self.modules():
+            if isinstance(
+                m,
+                (
+                    base_layers.SpectralNormConv2d,
+                    base_layers.SpectralNormLinear,
+                    base_layers.InducedNormConv2d,
+                    base_layers.InducedNormLinear,
+                ),
+            ):
+                m.compute_weight(update=True)
 
 
 class StackediResBlocks(layers.SequentialFlow):

@@ -38,21 +38,14 @@ class OpenHybrid(nn.Module):
         else:
             raise RuntimeError(f"Unknown flow module {flow_module}")
 
-        self.prior = torch.distributions.normal.Normal(loc=0.0, scale=1.0)
-
-    def _compute_ll(self, z, delta_logp):
+    def _compute_ll_rf(self, z, delta_logp):
         std_normal_logprob = -(math.log(2 * math.pi) + z.pow(2)) / 2
         logpz = std_normal_logprob.view(z.size(0), -1).sum(1, keepdim=True)
         logpx = logpz - delta_logp
         return logpx
 
-    def _compute_ll_v2(self, z, jac):
+    def _compute_ll_dn(self, z, jac):
         logpx = -0.5 * torch.sum(z**2, dim=(1,)) + jac
-        return logpx
-
-    def _compute_ll_v3(self, z, ldj):
-        logpz = self.prior.log_prob(z).sum(dim=1, keepdim=True)
-        logpx = ldj + logpz
         return logpx
 
     def forward(self, x, classify=True, flow=True, enc_grad=True):
@@ -66,15 +59,13 @@ class OpenHybrid(nn.Module):
             if isinstance(self.flow_module, ResidualFlow):
                 # perform min-max normalization
                 rescaled_feats = (feats - feats.min()) / (feats.max() - feats.min())
-                # add two extra trailing dimensions
-                for _ in range(2):
-                    rescaled_feats = rescaled_feats.unsqueeze(-1)
+                rescaled_feats = rescaled_feats.view(*rescaled_feats.size(), 1, 1)
                 z, delta_logp = self.flow_module(rescaled_feats, 0)
-                logpx = self._compute_ll(z, delta_logp)
+                logpx = self._compute_ll_rf(z, delta_logp)
             else:  # DifferNet
                 z = self.flow_module(feats)
                 jac = self.flow_module.jacobian(run_forward=False)
-                logpx = self._compute_ll_v2(z, jac)
+                logpx = self._compute_ll_dn(z, jac)
             out += (logpx,)
         return out if len(out) > 1 else out[0]
 
@@ -90,12 +81,6 @@ def flow_update_context(flow_module, grad_rescale):
                         p.grad /= grad_rescale
         nn.utils.clip_grad.clip_grad_norm_(flow_module.parameters(), 1.0)
         yield
-        # update_lipschitz
-        with torch.no_grad():
-            for m in flow_module.modules():
-                if isinstance(m, SpectralNormConv2d) or isinstance(m, SpectralNormLinear):
-                    m.compute_weight(update=True)
-                if isinstance(m, InducedNormConv2d) or isinstance(m, InducedNormLinear):
-                    m.compute_weight(update=True)
+        flow_module.update_lipschitz()
     else:
         yield
