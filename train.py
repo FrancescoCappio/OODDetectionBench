@@ -278,7 +278,7 @@ class Trainer:
                     flow_module=self.args.oh_flow_module,
                 )
             else:
-                raise NotImplementedError(f"Netowrk {self.args.netowrk} does not support evaluator {self.args.evaluator}")
+                raise NotImplementedError(f"Network {self.args.network} does not support evaluator {self.args.evaluator}")
 
         if ckpt is not None: 
             print(f"Loading checkpoint {self.args.checkpoint_path}")
