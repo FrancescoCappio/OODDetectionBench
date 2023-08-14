@@ -192,8 +192,9 @@ class Trainer:
                 if ckpt is not None: 
                     old_size = ckpt["classifier.2.bias"].shape[0]
                     if not old_size == self.n_known_classes:
-                        del ckpt["classifier.2.weight"]
-                        del ckpt["classifier.2.bias"]
+                        for layer_idx in [0, 2]:
+                            del ckpt[f"classifier.{layer_idx}.weight"]
+                            del ckpt[f"classifier.{layer_idx}.bias"]
                 
             else:
                 raise NotImplementedError(f"Model {self.args.model} is not supported with network {self.args.network}")
