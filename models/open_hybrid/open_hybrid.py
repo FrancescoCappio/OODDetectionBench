@@ -41,10 +41,9 @@ class OpenHybrid(nn.Module):
         self.prior = torch.distributions.normal.Normal(loc=0.0, scale=1.0)
 
     def _compute_ll(self, z, delta_logp):
-        nvals = 256
         std_normal_logprob = -(math.log(2 * math.pi) + z.pow(2)) / 2
         logpz = std_normal_logprob.view(z.size(0), -1).sum(1, keepdim=True)
-        logpx = logpz - delta_logp - np.log(nvals) * self.latent_dim
+        logpx = logpz - delta_logp
         return logpx
 
     def _compute_ll_v2(self, z, jac):
