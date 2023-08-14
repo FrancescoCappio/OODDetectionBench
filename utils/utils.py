@@ -61,10 +61,11 @@ def get_aux_modules_dict(optimizer, scheduler):
     """
     aux_modules = {}
     for module_type, module in zip(["optimizer", "scheduler"], [optimizer, scheduler]):
-        # module can be a dict of modules; in this case, flatten it
-        if isinstance(module, dict):
-            for k, v in module.items():
-                aux_modules[f"{module_type}_{k}"] = v
-        else:
-            aux_modules[module_type] = module
+        if module is not None:
+            # module can be a dict of modules; in this case, flatten it
+            if isinstance(module, dict):
+                for k, v in module.items():
+                    aux_modules[f"{module_type}_{k}"] = v
+            else:
+                aux_modules[module_type] = module
     return aux_modules
