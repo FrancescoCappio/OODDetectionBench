@@ -3,20 +3,8 @@
     code src: https://github.com/marco-rudolph/differnet
 """
 
-import torch
-
 from .freia_funcs import permute_layer, glow_coupling_layer, F_fully_connected, \
     ReversibleGraphNet, OutputNode, InputNode, Node
-
-
-def get_nll_loss(z, jac):
-    """ check equation 4 of the paper why this makes sense - oh and just ignore the scaling here """
-    return torch.mean(0.5 * torch.sum(z ** 2, dim=(1,)) - jac) / z.shape[1]
-
-
-def get_ll(z, jac):
-    nll = 0.5 * torch.sum(z ** 2, dim=(1,)) - jac
-    return -1 * nll
 
 
 def build_nf_head(input_dim=1024, n_coupling_blocks=8, clamp_alpha=3, fc_internal=2048, dropout=0.0):
