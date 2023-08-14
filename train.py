@@ -78,7 +78,8 @@ def get_args():
     parser.add_argument("--oh_lr_multipliers", type=str, default="1-1",
                         help="LR multipliers for classifier and flow module (only used in OpenHybrid)")
     parser.add_argument("--oh_flow_update_freq", type=int, default=2, help="Period of steps to follow for flow module updates (only used in OpenHybrid)")
-    parser.add_argument("--oh_enc_update", type=str, choices=["always", "cls", "flow"], default="always", help="Tie encoder updates to another module (only used in OpenHybrid)")
+    parser.add_argument("--oh_bind_backbone", type=str, choices=["cls", "flow"], default="",
+                        help="Tie backbone updates to another module exclusively (only used in OpenHybrid)")
 
     # run params 
     parser.add_argument("--seed", type=int, default=42, help="Random seed for data splitting")
@@ -534,6 +535,9 @@ class Trainer:
 
         train_log_fn = self.get_train_log_fn(log_period)
 
+        update_enc_with_cls = (not self.args.freeze_backbone and self.args.oh_bind_backbone != "flow")
+        update_enc_with_flow = (not self.args.freeze_backbone and self.args.oh_bind_backbone != "cls")
+
         print(f"Start training, lr={self.args.learning_rate}, start_iter={start_it}, iterations={self.args.iterations}, warmup_iters={self.args.warmup_iters}")
 
         for it in range(start_it, self.args.iterations):
@@ -552,26 +556,24 @@ class Trainer:
                 for optim_ in optimizer.values():
                     optim_.zero_grad()
                 # classification
-                update_enc = (not self.args.freeze_backbone and self.args.oh_enc_update != "flow")
-                outputs = self.model(images, flow=False, enc_grad=update_enc)
+                outputs = self.model(images, flow=False, enc_grad=update_enc_with_cls)
                 loss_cls = loss_fn(outputs, labels)
                 running_loss["cls"] += loss_cls.item()
                 loss_cls.backward()
                 optimizer["cls"].step()
-                if update_enc:
+                if update_enc_with_cls:
                     optimizer["enc"].step()
                     optimizer["enc"].zero_grad()
                 # flow
                 if it % self.args.oh_flow_update_freq == 0:
-                    update_enc = (not self.args.freeze_backbone and self.args.oh_enc_update != "cls")
-                    ll = self.model(images, classify=False, enc_grad=update_enc)
+                    ll = self.model(images, classify=False, enc_grad=update_enc_with_flow)
                     loss_flow = -torch.mean(ll) / self.output_num
                     running_loss["flow"] += loss_flow.item()
                     loss_flow.backward()
                     with flow_update_context(self.raw_model.flow_module, self.args.oh_flow_update_freq):
                         optimizer["flow"].step()
-                        if update_enc:
-                            optimizer["enc"].step()
+                    if update_enc_with_flow:
+                        optimizer["enc"].step()
                 # schedulers
                 if scheduler is not None:
                     for sched_ in scheduler.values():
