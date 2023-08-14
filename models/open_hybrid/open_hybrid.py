@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from .differnet import *
+from .coupling import *
 from .resflow import *
 
 
