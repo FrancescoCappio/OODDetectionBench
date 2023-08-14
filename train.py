@@ -532,11 +532,10 @@ class Trainer:
         running_loss = {"cls": 0}
         if self.args.evaluator == "OpenHybrid":
             running_loss["flow"] = 0
+            update_enc_with_cls = (not self.args.freeze_backbone and self.args.oh_bind_backbone != "flow")
+            update_enc_with_flow = (not self.args.freeze_backbone and self.args.oh_bind_backbone != "cls")
 
         train_log_fn = self.get_train_log_fn(log_period)
-
-        update_enc_with_cls = (not self.args.freeze_backbone and self.args.oh_bind_backbone != "flow")
-        update_enc_with_flow = (not self.args.freeze_backbone and self.args.oh_bind_backbone != "cls")
 
         print(f"Start training, lr={self.args.learning_rate}, start_iter={start_it}, iterations={self.args.iterations}, warmup_iters={self.args.warmup_iters}")
 
