@@ -73,9 +73,10 @@ def get_args():
     parser.add_argument("--label_smoothing", type=float, default=0, help="Label smoothing for loss computation")
 
     # OpenHybrid
-    parser.add_argument("--cls_lr_multiplier", type=int, default=100, help="LR multiplier for classification head optimizer (only used in OpenHybrid)")
-    parser.add_argument("--flow_update_freq", type=int, default=2, help="Period of steps to follow for flow module updates (only used in OpenHybrid)")
-    parser.add_argument("--enc_update", type=str, choices=["always", "cls", "flow"], default="always", help="Tie encoder updates to another module (only used in OpenHybrid)")
+    parser.add_argument("--oh_lr_multipliers", type=str, default="1-1",
+                        help="LR multipliers for classifier and flow module (only used in OpenHybrid)")
+    parser.add_argument("--oh_flow_update_freq", type=int, default=2, help="Period of steps to follow for flow module updates (only used in OpenHybrid)")
+    parser.add_argument("--oh_enc_update", type=str, choices=["always", "cls", "flow"], default="always", help="Tie encoder updates to another module (only used in OpenHybrid)")
 
     # run params 
     parser.add_argument("--seed", type=int, default=42, help="Random seed for data splitting")
@@ -488,14 +489,21 @@ class Trainer:
 
         # prepare optimizer
         if self.args.model.startswith("OpenHybrid_"):
-            optimizer = {"cls": optim.SGD(self.raw_model.classifier.parameters(), weight_decay=.0005, momentum=.9,
-                                          lr=self.args.cls_lr_multiplier * self.args.learning_rate)}
-            for name, model in zip(["enc", "flow"], [self.raw_model.encoder, self.raw_model.flow_module]):
-                optimizer[name] = optim.Adam(model.parameters(), lr=self.args.learning_rate)
-            scheduler = {
-                name: LinearWarmupCosineAnnealingLR(optim_, warmup_epochs=self.args.warmup_iters, max_epochs=self.args.iterations)
-                for name, optim_ in optimizer.items()
-            }
+            optimizer = {}
+            scheduler = {}
+            for module_name, model, lr_mult in zip(
+                ["enc", "cls", "flow"],
+                [self.raw_model.encoder, self.raw_model.classifier, self.raw_model.flow_module],
+                [1] + [float(m) for m in self.args.oh_lr_multipliers.split("-")],
+            ):
+                params, lr = model.parameters(), self.args.learning_rate * lr_mult
+                optimizer[module_name] = (
+                    optim.SGD(params, lr=lr, weight_decay=1e-4, momentum=0.9)
+                    if module_name == "cls"
+                    else optim.Adam(params, lr=lr, weight_decay=1e-5)
+                )
+                if scheduler is not None:
+                    scheduler[module_name] = LinearWarmupCosineAnnealingLR(optimizer[module_name], warmup_epochs=self.args.warmup_iters, max_epochs=self.args.iterations)
         else:
             optim_params = self.model.parameters()
             if self.args.freeze_backbone:
@@ -550,7 +558,7 @@ class Trainer:
                 for optim_ in optimizer.values():
                     optim_.zero_grad()
                 # classification
-                update_enc = (self.args.enc_update != "flow")
+                update_enc = (not self.args.freeze_backbone and self.args.oh_enc_update != "flow")
                 outputs = self.model(images, flow=False, enc_grad=update_enc)
                 loss_cls = loss_fn(outputs, labels)
                 running_loss["cls"] += loss_cls.item()
@@ -560,19 +568,20 @@ class Trainer:
                     optimizer["enc"].step()
                     optimizer["enc"].zero_grad()
                 # flow
-                if it % self.args.flow_update_freq == 0:
-                    update_enc = (self.args.enc_update != "cls")
+                if it % self.args.oh_flow_update_freq == 0:
+                    update_enc = (not self.args.freeze_backbone and self.args.oh_enc_update != "cls")
                     ll = self.model(images, classify=False, enc_grad=update_enc)
-                    loss_flow = -torch.mean(ll) / self.raw_model.latent_dim / np.log(2)    # compute bpd
+                    loss_flow = -torch.mean(ll) / self.raw_model.latent_dim
                     running_loss["flow"] += loss_flow.item()
                     loss_flow.backward()
-                    with flow_update_context(self.raw_model.flow_module, self.args.flow_update_freq):
+                    with flow_update_context(self.raw_model.flow_module, self.args.oh_flow_update_freq):
                         optimizer["flow"].step()
                         if update_enc:
                             optimizer["enc"].step()
                 # schedulers
-                for sched_ in scheduler.values():
-                    sched_.step()
+                if scheduler is not None:
+                    for sched_ in scheduler.values():
+                        sched_.step()
             else:
                 outputs, _ = self.model(images)
                 loss = loss_fn(outputs, labels)
