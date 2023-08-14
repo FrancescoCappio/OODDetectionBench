@@ -21,9 +21,7 @@ def get_resnet(network, ckpt=None, n_known_classes=1000, random_init=False):
 
     # we need default fc params to not change across runs
     torch.manual_seed(42)
-    if n_known_classes is None:
-        model.fc = None
-    elif n_known_classes != 1000:
+    if not n_known_classes == 1000:
         model.fc = nn.Linear(in_features=output_num, out_features=n_known_classes)
 
     def feats_forward(self, x):
@@ -37,10 +35,8 @@ def get_resnet(network, ckpt=None, n_known_classes=1000, random_init=False):
         x = self.layer4(x)
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)
-        
-        if self.fc is None:
-            return x
-        return self.fc(x), x
+
+        return self.fc(x), x 
 
     model.forward = types.MethodType(feats_forward, model)
 

@@ -13,8 +13,6 @@ class OpenHybrid(nn.Module):
     def __init__(self, encoder, latent_dim, cls_hidden_dim, num_classes, flow_module="resflow"):
         super().__init__()
 
-        self.latent_dim = latent_dim
-
         self.encoder = encoder
 
         self.classifier = (
@@ -33,7 +31,7 @@ class OpenHybrid(nn.Module):
                 init_layer=LogitTransform(0.05),
                 actnorm=True,
             )
-        elif flow_module == "differnet":
+        elif flow_module == "coupling":
             self.flow_module = build_nf_head(latent_dim)
         else:
             raise RuntimeError(f"Unknown flow module {flow_module}")
@@ -51,6 +49,11 @@ class OpenHybrid(nn.Module):
     def forward(self, x, classify=True, flow=True, enc_grad=True):
         with nullcontext() if enc_grad else torch.no_grad():
             feats = self.encoder(x)
+        if isinstance(feats, tuple):
+            if len(feats) == 2 and feats[0] is feats[1]:
+                feats = feats[0]
+            else:
+                raise RuntimeError("Received unknown encoder output")
         out = ()
         if classify:
             cls_logits = self.classifier(feats)

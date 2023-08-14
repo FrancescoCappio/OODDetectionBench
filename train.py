@@ -45,7 +45,7 @@ def get_args():
     parser.add_argument("--network", type=str, default="resnet101", choices=["resnet101", "vit", "resend", 
                                                                              "resnetv2_101x3"])
     parser.add_argument("--model", type=str, default="CE", choices=["CE", "simclr", "supclr", "cutmix", "CSI", "supCSI", "clip", "DINO", 
-                                                                    "resend", "DINOv2", "BiT", "CE-IM22k", "random_init", "CE-IM21k", "OpenHybrid_rf", "OpenHybrid_dn"])
+                                                                    "resend", "DINOv2", "BiT", "CE-IM22k", "random_init", "CE-IM21k"])
     parser.add_argument("--evaluator", type=str, help="Strategy to compute normality scores", default="prototypes_distance",
                         choices=["prototypes_distance", "MSP", "MLS", "ODIN", "energy", "gradnorm", "mahalanobis", "gram", "knn_distance",
                                  "linear_probe", "MCM", "knn_ood", "resend", "react", "OpenHybrid"])
@@ -73,6 +73,8 @@ def get_args():
     parser.add_argument("--label_smoothing", type=float, default=0, help="Label smoothing for loss computation")
 
     # OpenHybrid
+    parser.add_argument("--oh_flow_module", type=str, choices=["resflow", "coupling"], default="resflow",
+                        help="The architecture to use for the flow modue (only used in OpenHybrid)")
     parser.add_argument("--oh_lr_multipliers", type=str, default="1-1",
                         help="LR multipliers for classifier and flow module (only used in OpenHybrid)")
     parser.add_argument("--oh_flow_update_freq", type=int, default=2, help="Period of steps to follow for flow module updates (only used in OpenHybrid)")
@@ -174,29 +176,6 @@ class Trainer:
                 self.output_num = 512
                 self.model = WrapperWithFC(model.visual, self.output_num, self.n_known_classes, half_precision=True)
 
-            elif self.args.model.startswith("OpenHybrid_"):
-                assert self.args.evaluator == "OpenHybrid", f"Unsupported evaluator {self.args.evaluator} for OpenHybrid model"
-
-                from models.open_hybrid import OpenHybrid
-
-                encoder, self.output_num = get_resnet(self.args.network, n_known_classes=None)
-                cls_hidden_dim = self.output_num // 2
-                if self.args.model == "OpenHybrid_rf":
-                    flow_module = "resflow"
-                elif self.args.model == "OpenHybrid_dn":
-                    flow_module = "differnet"
-                else:
-                    raise RuntimeError(f"Unknown model {self.args.model}")
-                self.model = OpenHybrid(encoder, latent_dim=self.output_num, cls_hidden_dim=cls_hidden_dim, num_classes=self.n_known_classes, flow_module=flow_module)
-
-                # if ckpt fc size does not match current size discard it
-                if ckpt is not None: 
-                    old_size = ckpt["classifier.2.bias"].shape[0]
-                    if not old_size == self.n_known_classes:
-                        for layer_idx in [0, 2]:
-                            del ckpt[f"classifier.{layer_idx}.weight"]
-                            del ckpt[f"classifier.{layer_idx}.bias"]
-                
             else:
                 raise NotImplementedError(f"Model {self.args.model} is not supported with network {self.args.network}")
 
@@ -285,6 +264,21 @@ class Trainer:
             self.output_num = self.model.output_num
         else:
             raise NotImplementedError(f"Network {self.args.network} not implemented")
+
+        if self.args.evaluator == "OpenHybrid":
+            if self.args.network in ["vit", "resnetv2_101x3"]:
+                from models.open_hybrid import OpenHybrid
+                self.model.fc = nn.Identity()   # remove "built-in" FC
+                # TODO: handle half-precision?
+                self.model = OpenHybrid(
+                    self.model,
+                    latent_dim=self.output_num,
+                    cls_hidden_dim=self.output_num // 2,
+                    num_classes=self.n_known_classes,
+                    flow_module=self.args.oh_flow_module,
+                )
+            else:
+                raise NotImplementedError(f"Netowrk {self.args.netowrk} does not support evaluator {self.args.evaluator}")
 
         if ckpt is not None: 
             print(f"Loading checkpoint {self.args.checkpoint_path}")
@@ -463,7 +457,7 @@ class Trainer:
 
 
     def do_train(self):
-        if self.args.model.startswith("OpenHybrid_"):
+        if self.args.evaluator == "OpenHybrid":
             from models.open_hybrid import flow_update_context
 
         # prepare data 
@@ -488,7 +482,7 @@ class Trainer:
         self.to_train()
 
         # prepare optimizer
-        if self.args.model.startswith("OpenHybrid_"):
+        if self.args.evaluator == "OpenHybrid":
             optimizer = {}
             scheduler = {}
             for module_name, model, lr_mult in zip(
@@ -535,7 +529,7 @@ class Trainer:
         log_period = 10
         ckpt_period = 500
         running_loss = {"cls": 0}
-        if self.args.model.startswith("OpenHybrid_"):
+        if self.args.evaluator == "OpenHybrid":
             running_loss["flow"] = 0
 
         train_log_fn = self.get_train_log_fn(log_period)
@@ -554,7 +548,7 @@ class Trainer:
             images = images.to(self.device)
             labels = labels.to(self.device)
 
-            if self.args.model.startswith("OpenHybrid_"): 
+            if self.args.evaluator == "OpenHybrid": 
                 for optim_ in optimizer.values():
                     optim_.zero_grad()
                 # classification
@@ -571,7 +565,7 @@ class Trainer:
                 if it % self.args.oh_flow_update_freq == 0:
                     update_enc = (not self.args.freeze_backbone and self.args.oh_enc_update != "cls")
                     ll = self.model(images, classify=False, enc_grad=update_enc)
-                    loss_flow = -torch.mean(ll) / self.raw_model.latent_dim
+                    loss_flow = -torch.mean(ll) / self.output_num
                     running_loss["flow"] += loss_flow.item()
                     loss_flow.backward()
                     with flow_update_context(self.raw_model.flow_module, self.args.oh_flow_update_freq):
