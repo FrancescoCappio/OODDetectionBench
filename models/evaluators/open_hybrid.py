@@ -11,7 +11,7 @@ from models.evaluators.common import (
 
 @torch.no_grad()
 def open_hybrid_evaluator(args, train_loader, test_loader, device, model, s=0):
-    _, train_lls, train_lbls = run_model(
+    _, _, train_lbls = run_model(
         args, model, train_loader, device, open_hybrid=True, support=True
     )
     test_logits, test_lls, test_lbls = run_model(
@@ -24,9 +24,10 @@ def open_hybrid_evaluator(args, train_loader, test_loader, device, model, s=0):
 
     print(f"Num known: {ood_labels.sum()}. Num unknown: {len(test_lbls) - ood_labels.sum()}.")
 
+    cs_predictions = test_logits.argmax(axis=1)
+
     known_mask = ood_labels == 1
-    # cs_acc = closed_set_accuracy(cs_predictions[known_mask], test_lbls[known_mask])
-    cs_acc = -1 # TODO
+    cs_acc = closed_set_accuracy(cs_predictions[known_mask], test_lbls[known_mask])
     metrics = calc_ood_metrics(test_lls, ood_labels)
     metrics["cs_acc"] = cs_acc
 
