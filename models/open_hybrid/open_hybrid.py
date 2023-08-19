@@ -35,17 +35,17 @@ class OpenHybrid(nn.Module):
         else:
             raise RuntimeError(f"Unknown flow module {flow_module}")
 
-    def _compute_ll_rf(self, z, delta_logp):
+    def _compute_ll_rf(self, z, delta_logp, beta=1.0):
         std_normal_logprob = -(math.log(2 * math.pi) + z.pow(2)) / 2
         logpz = std_normal_logprob.view(z.size(0), -1).sum(1, keepdim=True)
-        logpx = logpz - delta_logp
+        logpx = logpz - beta * delta_logp
         return logpx
 
-    def _compute_ll_dn(self, z, jac):
-        logpx = -0.5 * torch.sum(z**2, dim=(1,)) + jac
+    def _compute_ll_dn(self, z, jac, beta=1.0):
+        logpx = -0.5 * torch.sum(z**2, dim=(1,)) + beta * jac
         return logpx
 
-    def forward(self, x, classify=True, flow=True, enc_grad=True):
+    def forward(self, x, classify=True, flow=True, enc_grad=True, beta=1.0):
         with nullcontext() if enc_grad else torch.no_grad():
             feats = self.encoder(x)
         if isinstance(feats, tuple):
@@ -63,11 +63,11 @@ class OpenHybrid(nn.Module):
                 rescaled_feats = (feats - feats.min()) / (feats.max() - feats.min())
                 rescaled_feats = rescaled_feats.view(*rescaled_feats.size(), 1, 1)
                 z, delta_logp = self.flow_module(rescaled_feats, 0)
-                logpx = self._compute_ll_rf(z, delta_logp)
+                logpx = self._compute_ll_rf(z, delta_logp, beta=beta)
             else:  # DifferNet
                 z = self.flow_module(feats)
                 jac = self.flow_module.jacobian(run_forward=False)
-                logpx = self._compute_ll_dn(z, jac)
+                logpx = self._compute_ll_dn(z, jac, beta=beta)
             out += (logpx,)
         return out if len(out) > 1 else out[0]
 

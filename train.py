@@ -80,6 +80,8 @@ def get_args():
     parser.add_argument("--oh_flow_update_freq", type=int, default=2, help="Period of steps to follow for flow module updates (only used in OpenHybrid)")
     parser.add_argument("--oh_bind_backbone", type=str, choices=["cls", "flow"], default="",
                         help="Tie backbone updates to another module exclusively (only used in OpenHybrid)")
+    parser.add_argument("--oh_beta", action="store_true", default=False,
+                        help="Rescale the jacobian contribution in the flow loss")
 
     # run params 
     parser.add_argument("--seed", type=int, default=42, help="Random seed for data splitting")
@@ -565,7 +567,12 @@ class Trainer:
                     optimizer["enc"].zero_grad()
                 # flow
                 if it % self.args.oh_flow_update_freq == 0:
-                    ll = self.model(images, classify=False, enc_grad=update_enc_with_flow)
+                    beta = (
+                        it / self.args.iterations
+                        if self.args.oh_beta and scheduler is not None
+                        else 1.0
+                    )
+                    ll = self.model(images, classify=False, enc_grad=update_enc_with_flow, beta=beta)
                     loss_flow = -torch.mean(ll) / self.output_num
                     running_loss["flow"] += loss_flow.item()
                     loss_flow.backward()
