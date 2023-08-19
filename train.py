@@ -73,12 +73,12 @@ def get_args():
     parser.add_argument("--label_smoothing", type=float, default=0, help="Label smoothing for loss computation")
 
     # OpenHybrid
-    parser.add_argument("--oh_flow_module", type=str, choices=["resflow", "coupling"], default="resflow",
+    parser.add_argument("--oh_flow_module", type=str, choices=["resflow", "coupling"], default="coupling",
                         help="The architecture to use for the flow modue (only used in OpenHybrid)")
-    parser.add_argument("--oh_lr_multipliers", type=str, default="1-1",
+    parser.add_argument("--oh_lr_multipliers", type=str, default="1-10",
                         help="LR multipliers for classifier and flow module (only used in OpenHybrid)")
-    parser.add_argument("--oh_flow_update_freq", type=int, default=2, help="Period of steps to follow for flow module updates (only used in OpenHybrid)")
-    parser.add_argument("--oh_bind_backbone", type=str, choices=["cls", "flow"], default="",
+    parser.add_argument("--oh_flow_update_freq", type=int, default=1, help="Period of steps to follow for flow module updates (only used in OpenHybrid)")
+    parser.add_argument("--oh_bind_backbone", type=str, choices=["none", "cls", "flow"], default="cls",
                         help="Tie backbone updates to another module exclusively (only used in OpenHybrid)")
     parser.add_argument("--oh_beta", action="store_true", default=False,
                         help="Rescale the jacobian contribution in the flow loss")
