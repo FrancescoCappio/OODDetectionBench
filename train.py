@@ -82,6 +82,8 @@ def get_args():
                         help="Tie backbone updates to another module exclusively (only used in OpenHybrid)")
     parser.add_argument("--oh_beta", action="store_true", default=False,
                         help="Rescale the jacobian contribution in the flow loss")
+    parser.add_argument("--oh_backbone_only_ckpt", action="store_true", default=False,
+                        help="Only load the backbone state dict from a specified checkpoint (only used in OpenHybrid)")
 
     # run params 
     parser.add_argument("--seed", type=int, default=42, help="Random seed for data splitting")
@@ -188,7 +190,11 @@ class Trainer:
                 import timm
                 self.output_num = 768
 
-                if self.args.model == "DINO":
+                if self.args.evaluator == "OpenHybrid":
+                    # we set num_classes to 0 in order to obtain pooled feats
+                    encoder = timm.create_model("deit_base_patch16_224", pretrained=True, num_classes=0)
+                
+                elif self.args.model == "DINO":
                     # we set num_classes to 0 in order to obtain pooled feats
                     model = timm.create_model("deit_base_patch16_224", pretrained=True, num_classes=0)
 
@@ -232,9 +238,12 @@ class Trainer:
 
             elif self.args.model == "DINOv2":
                 dinov2_vitb14 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14')
-                from models.common import WrapperWithFC
                 self.output_num = 1024
-                self.model = WrapperWithFC(dinov2_vitb14, self.output_num, self.n_known_classes)
+                if self.args.evaluator == "OpenHybrid":
+                    encoder = dinov2_vitb14
+                else:
+                    from models.common import WrapperWithFC
+                    self.model = WrapperWithFC(dinov2_vitb14, self.output_num, self.n_known_classes)
 
             elif self.args.model == "CE-IM22k" or self.args.model == "CE-IM21k":
                 # https://huggingface.co/google/vit-large-patch16-224-in21k
@@ -255,8 +264,10 @@ class Trainer:
             # https://huggingface.co/timm/resnetv2_101x3_bit.goog_in21k
             model = timm.create_model('resnetv2_101x3_bit.goog_in21k', pretrained=True, num_classes=0)
             self.output_num = 6144
-
-            self.model = WrapperWithFC(model, self.output_num, self.n_known_classes)
+            if self.args.evaluator == "OpenHybrid":
+                encoder = model
+            else:
+                self.model = WrapperWithFC(model, self.output_num, self.n_known_classes)
 
         elif self.args.network == "resend":
             assert self.args.only_eval and ckpt is not None, "Cannot perform eval without a pretrained model"
@@ -269,23 +280,25 @@ class Trainer:
             raise NotImplementedError(f"Network {self.args.network} not implemented")
 
         if self.args.evaluator == "OpenHybrid":
-            if self.args.network in ["vit", "resnetv2_101x3"]:
-                from models.open_hybrid import OpenHybrid
-                self.model.fc = nn.Identity()   # remove "built-in" FC
-                # TODO: handle half-precision?
-                self.model = OpenHybrid(
-                    self.model,
-                    latent_dim=self.output_num,
-                    cls_hidden_dim=self.output_num // 2,
-                    num_classes=self.n_known_classes,
-                    flow_module=self.args.oh_flow_module,
-                )
-            else:
-                raise NotImplementedError(f"Network {self.args.network} does not support evaluator {self.args.evaluator}")
-
-        if ckpt is not None: 
+            if "encoder" not in locals():
+                raise NotImplementedError(f"Unsupported OpenHybrid decoder {self.args.network}-{self.args.model}")
+            from models.open_hybrid import OpenHybrid
+            self.model = OpenHybrid(
+                encoder,
+                latent_dim=self.output_num,
+                cls_hidden_dim=self.output_num // 2,
+                num_classes=self.n_known_classes,
+                flow_module=self.args.oh_flow_module,
+            )
+        
+        if ckpt is not None:
+            model_to_load = (
+                self.model.encoder
+                if self.args.evaluator == "OpenHybrid" and self.args.oh_backbone_only_ckpt
+                else self.model
+            )
             print(f"Loading checkpoint {self.args.checkpoint_path}")
-            missing, unexpected = self.model.load_state_dict(clean_ckpt(ckpt, self.model), strict=False)
+            missing, unexpected = model_to_load.load_state_dict(clean_ckpt(ckpt, model_to_load), strict=False)
             print(f"Missing keys: {missing}, unexpected keys: {unexpected}")
 
         self.to_device(self.device)

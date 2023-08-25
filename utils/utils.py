@@ -47,7 +47,7 @@ def clean_ckpt(ckpt, model):
     new_dict = {}
     model_dict = model.state_dict()
     for k in ckpt.keys():
-        if k not in model_dict and k.startswith("base_model"):
+        if k not in model_dict and "base_model" in k:
             new_k = k.replace("base_model.","")
             new_dict[new_k] = ckpt[k]
         else:
