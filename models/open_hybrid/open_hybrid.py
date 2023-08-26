@@ -45,7 +45,7 @@ class OpenHybrid(nn.Module):
         logpx = -0.5 * torch.sum(z**2, dim=(1,)) + beta * jac
         return logpx
 
-    def forward(self, x, classify=True, flow=True, enc_grad=True, beta=1.0):
+    def forward(self, x, classify=True, flow=False, enc_grad=True, beta=1.0):
         with nullcontext() if enc_grad else torch.no_grad():
             feats = self.encoder(x)
         if isinstance(feats, tuple):
@@ -69,6 +69,7 @@ class OpenHybrid(nn.Module):
                 jac = self.flow_module.jacobian(run_forward=False)
                 logpx = self._compute_ll_dn(z, jac, beta=beta)
             out += (logpx,)
+        out += (feats,)
         return out if len(out) > 1 else out[0]
 
 

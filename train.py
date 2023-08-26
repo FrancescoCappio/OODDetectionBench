@@ -48,7 +48,7 @@ def get_args():
                                                                     "resend", "DINOv2", "BiT", "CE-IM22k", "random_init", "CE-IM21k"])
     parser.add_argument("--evaluator", type=str, help="Strategy to compute normality scores", default="prototypes_distance",
                         choices=["prototypes_distance", "MSP", "MLS", "ODIN", "energy", "gradnorm", "mahalanobis", "gram", "knn_distance",
-                                 "linear_probe", "MCM", "knn_ood", "resend", "react", "OpenHybrid"])
+                                 "linear_probe", "MCM", "knn_ood", "resend", "react", "flow"])
 
     # evaluators-specific parameters 
     parser.add_argument("--NNK", help="K value to use for Knn distance evaluator", type=int, default=1)
@@ -73,6 +73,7 @@ def get_args():
     parser.add_argument("--label_smoothing", type=float, default=0, help="Label smoothing for loss computation")
 
     # OpenHybrid
+    parser.add_argument("--open_hybrid", action="store_true", default=False)
     parser.add_argument("--oh_flow_module", type=str, choices=["resflow", "coupling"], default="coupling",
                         help="The architecture to use for the flow modue (only used in OpenHybrid)")
     parser.add_argument("--oh_lr_multipliers", type=str, default="1-10",
@@ -190,7 +191,7 @@ class Trainer:
                 import timm
                 self.output_num = 768
 
-                if self.args.evaluator == "OpenHybrid":
+                if self.args.open_hybrid:
                     # we set num_classes to 0 in order to obtain pooled feats
                     encoder = timm.create_model("deit_base_patch16_224", pretrained=True, num_classes=0)
                 
@@ -239,7 +240,7 @@ class Trainer:
             elif self.args.model == "DINOv2":
                 dinov2_vitb14 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14')
                 self.output_num = 1024
-                if self.args.evaluator == "OpenHybrid":
+                if self.args.open_hybrid:
                     encoder = dinov2_vitb14
                 else:
                     from models.common import WrapperWithFC
@@ -264,7 +265,7 @@ class Trainer:
             # https://huggingface.co/timm/resnetv2_101x3_bit.goog_in21k
             model = timm.create_model('resnetv2_101x3_bit.goog_in21k', pretrained=True, num_classes=0)
             self.output_num = 6144
-            if self.args.evaluator == "OpenHybrid":
+            if self.args.open_hybrid:
                 encoder = model
             else:
                 self.model = WrapperWithFC(model, self.output_num, self.n_known_classes)
@@ -279,7 +280,7 @@ class Trainer:
         else:
             raise NotImplementedError(f"Network {self.args.network} not implemented")
 
-        if self.args.evaluator == "OpenHybrid":
+        if self.args.open_hybrid:
             if "encoder" not in locals():
                 raise NotImplementedError(f"Unsupported OpenHybrid decoder {self.args.network}-{self.args.model}")
             from models.open_hybrid import OpenHybrid
@@ -294,7 +295,7 @@ class Trainer:
         if ckpt is not None:
             model_to_load = (
                 self.model.encoder
-                if self.args.evaluator == "OpenHybrid" and self.args.oh_backbone_only_ckpt
+                if self.args.open_hybrid and self.args.oh_backbone_only_ckpt
                 else self.model
             )
             print(f"Loading checkpoint {self.args.checkpoint_path}")
@@ -388,8 +389,8 @@ class Trainer:
             metrics = resend_evaluator(args,train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
 
-        elif self.args.evaluator == "OpenHybrid":
-            metrics = open_hybrid_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader, device=self.device,
+        elif self.args.evaluator == "flow":
+            metrics = flow_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader, device=self.device,
                                             model=self.model)
 
         else:
@@ -473,7 +474,7 @@ class Trainer:
 
 
     def do_train(self):
-        if self.args.evaluator == "OpenHybrid":
+        if self.args.open_hybrid:
             from models.open_hybrid import flow_update_context
 
         # prepare data 
@@ -498,7 +499,7 @@ class Trainer:
         self.to_train()
 
         # prepare optimizer
-        if self.args.evaluator == "OpenHybrid":
+        if self.args.open_hybrid:
             optimizer = {}
             scheduler = {}
             for module_name, model, lr_mult in zip(
@@ -545,7 +546,7 @@ class Trainer:
         log_period = 10
         ckpt_period = 500
         running_loss = {"cls": 0}
-        if self.args.evaluator == "OpenHybrid":
+        if self.args.open_hybrid:
             running_loss["flow"] = 0
             update_enc_with_cls = (not self.args.freeze_backbone and self.args.oh_bind_backbone != "flow")
             update_enc_with_flow = (not self.args.freeze_backbone and self.args.oh_bind_backbone != "cls")
@@ -566,11 +567,11 @@ class Trainer:
             images = images.to(self.device)
             labels = labels.to(self.device)
 
-            if self.args.evaluator == "OpenHybrid": 
+            if self.args.open_hybrid: 
                 for optim_ in optimizer.values():
                     optim_.zero_grad()
                 # classification
-                outputs = self.model(images, flow=False, enc_grad=update_enc_with_cls)
+                outputs, _ = self.model(images, enc_grad=update_enc_with_cls)
                 loss_cls = loss_fn(outputs, labels)
                 running_loss["cls"] += loss_cls.item()
                 loss_cls.backward()
@@ -585,7 +586,7 @@ class Trainer:
                         if self.args.oh_beta and scheduler is not None
                         else 1.0
                     )
-                    ll = self.model(images, classify=False, enc_grad=update_enc_with_flow, beta=beta)
+                    ll, _ = self.model(images, classify=False, flow=True, enc_grad=update_enc_with_flow, beta=beta)
                     loss_flow = -torch.mean(ll) / self.output_num
                     running_loss["flow"] += loss_flow.item()
                     loss_flow.backward()

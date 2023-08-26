@@ -10,12 +10,12 @@ from models.evaluators.common import (
 
 
 @torch.no_grad()
-def open_hybrid_evaluator(args, train_loader, test_loader, device, model, s=0):
+def flow_evaluator(args, train_loader, test_loader, device, model, s=0):
     _, _, train_lbls = run_model(
-        args, model, train_loader, device, open_hybrid=True, support=True
+        args, model, train_loader, device, flow=True, support=True
     )
     test_logits, test_lls, test_lbls = run_model(
-        args, model, test_loader, device, open_hybrid=True, support=False
+        args, model, test_loader, device, flow=True, support=False
     )
 
     # known labels have 1 for known samples and 0 for unknown ones
