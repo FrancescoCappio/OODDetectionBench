@@ -1,10 +1,11 @@
 import torch 
 import faiss
+import numpy as np
+from tqdm import tqdm
 
 from models.evaluators.common import prepare_ood_labels, calc_ood_metrics, run_model, closed_set_accuracy
 from models.common import normalize_feats
-import numpy as np
-from tqdm import tqdm
+from utils.utils import compute_R2
 
 def get_euclidean_normality_scores(test_features, prototypes):
     # normality scores computed as the opposite of the euclidean distance w.r.t. the nearest prototype
@@ -91,6 +92,8 @@ def knn_distance_evaluator(args, train_loader, test_loader, device, model, contr
         train_feats = normalize_feats(train_feats)
         test_feats = normalize_feats(test_feats)
 
+    r2_metric = compute_R2(train_feats, train_lbls, metric='cosine_distance' if normalize else 'euclidean_distance')
+
     if cosine_sim: 
         # returns neighbours with decreasing similarity (nearest to farthest) 
         index = faiss.IndexFlatIP(train_feats.shape[1])
@@ -114,6 +117,7 @@ def knn_distance_evaluator(args, train_loader, test_loader, device, model, contr
     cs_acc = closed_set_accuracy(test_predictions[known_mask], test_lbls[known_mask])
     metrics = calc_ood_metrics(test_normality_scores, ood_labels)
     metrics["cs_acc"] = cs_acc
+    metrics["support_R2"] = r2_metric
 
     return metrics 
 
