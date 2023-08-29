@@ -2,9 +2,11 @@ import torch
 import numpy as np
 from models.evaluators.common import prepare_ood_labels, calc_ood_metrics, run_model, closed_set_accuracy
 from utils.dist_utils import get_max_cpu_count
+from utils.utils import compute_R2
+import scipy
 
 @torch.no_grad()
-def EVM_evaluator(args, train_loader, test_loader, device, model, contrastive_head=False): 
+def EVM_evaluator(args, train_loader, test_loader, device, model, contrastive_head=False, normalize=False): 
     # this evaluator defines an Extreme Value Classifier and use it to estimate the normality of a given test sample 
     # ref paper: http://doi.org/10.1109/TPAMI.2017.2707495
     workers = get_max_cpu_count()
@@ -15,12 +17,14 @@ def EVM_evaluator(args, train_loader, test_loader, device, model, contrastive_he
     _, train_feats, train_lbls = run_model(args, model, train_loader, device, contrastive=contrastive_head, support=True)
     _, test_feats, test_lbls = run_model(args, model, test_loader, device, contrastive=contrastive_head, support=False)
 
+    r2_metric = compute_R2(train_feats, train_lbls, metric='cosine_distance' if normalize else 'euclidean_distance')
+
     # we need to divide train sample by class 
     known_labels = np.unique(train_lbls)
     known_labels.sort()
     train_classes = [train_feats[train_lbls == lbl] for lbl in known_labels]
     # create and train the classifier 
-    mevm = EVM.MultipleEVM(tailsize=len(train_feats))
+    mevm = EVM.MultipleEVM(tailsize=len(train_feats), distance_function=scipy.spatial.distance.cosine if normalize else scipy.spatial.distance.euclidean)
     mevm.train(train_classes, parallel=workers)
     
     # estimate probabilities for test data
@@ -40,6 +44,7 @@ def EVM_evaluator(args, train_loader, test_loader, device, model, contrastive_he
 
     metrics = calc_ood_metrics(pred_prob, ood_labels)
     metrics["cs_acc"] = cs_acc
+    metrics["support_R2"] = r2_metric
 
     return metrics 
 

@@ -1,6 +1,7 @@
 import math 
 import torch
 import warnings
+import numpy as np
 
 def _no_grad_trunc_normal_(tensor, mean, std, a, b):
     # Cut & paste from PyTorch official master until it's in a few official releases - RW
@@ -81,3 +82,72 @@ def interpolate_ckpts(zeroshot_ckpt, finetuned_ckpt, alpha):
         k: (1-alpha) * zeroshot_ckpt[k] + alpha * finetuned_ckpt[k] for k in zeroshot_ckpt.keys()
     }
     return new_state_dict
+
+
+@torch.no_grad()
+def compute_sets_distance(feats1, feats2, metric="cosine_distance"):
+    """Compute the average distance between pairs of samples coming from two sets"""
+    feats1 = torch.from_numpy(feats1)
+    feats2 = torch.from_numpy(feats2)
+
+    if metric == "cosine_distance":
+        def set_distance_fn(set1, set2):
+            norms1 = set1.norm(dim=1, keepdim=True)
+            norms2 = set2.norm(dim=1, keepdim=True)
+            set1_normalized = set1/norms1
+            set2_normalized = set2/norms2
+            return 1 - (torch.matmul(set1_normalized, set2_normalized.T))
+    elif metric == "euclidean_distance":
+        def set_distance_fn(set1, set2): 
+            return torch.cdist(set1, set2)
+    else:
+        raise NotImplementedError(f"Unknown distace metric {metric}")
+
+    all_distances = set_distance_fn(feats1, feats2)
+    return all_distances.mean().numpy()
+
+
+def compute_R2(feats, labels, metric="cosine_distance", return_stats=False):
+    """Compute the R2 metric from https://papers.nips.cc/paper/2021/hash/f0bf4a2da952528910047c31b6c2e951-Abstract.html
+
+    Parameters: 
+    feats (np.ndarray): tensor of shape (BS x features_len)
+    labels (np.ndarray): tensor of labels (BS)
+
+    Returns: 
+    R2 (int): R2 metric
+    """
+
+    label_set = np.unique(labels)
+    cls_compactness = np.zeros(len(label_set))
+
+    for lbl in label_set:
+        mask = labels == lbl 
+
+        cls_feats = feats[mask]
+        compactness = compute_sets_distance(cls_feats, cls_feats, metric=metric)
+        cls_compactness[lbl] = compactness
+
+    d_within = cls_compactness.mean()
+
+    d_total = 0
+    for lbl1 in label_set:
+        mask1 = labels == lbl1
+        cls_feats1 = feats[mask1]
+
+        for lbl2 in label_set: 
+            mask2 = labels == lbl2
+            cls_feats2 = feats[mask2]
+
+            cls_pair_distance = compute_sets_distance(cls_feats1, cls_feats2, metric=metric)
+            d_total += cls_pair_distance
+
+    d_total /= (len(label_set)*len(label_set))
+
+    res = 1 - (d_within/d_total)
+    res = res.item()
+
+    if return_stats:
+        return res, d_total, d_within
+    
+    return res
