@@ -1,7 +1,12 @@
+from contextlib import nullcontext
+
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
+
 from utils.utils import trunc_normal_
+
+from .nf import build_nf_head
 
 BATCH_NORM_EPSILON = 1e-5
 
@@ -148,3 +153,40 @@ class WrapperWithFC(nn.Module):
         if self.base_output_map:
             feats = self.base_output_map(feats)
         return self.fc(feats), feats
+
+
+class WrapperWithNF(nn.Module):
+    def __init__(self, base_model, out_dim, n_classes):
+        super().__init__()
+        self.base_model = base_model
+        cls_hidden_dim = out_dim // 2
+        self.cls_head = (
+            nn.Linear(out_dim, n_classes)
+            if cls_hidden_dim is None
+            else nn.Sequential(
+                nn.Linear(out_dim, cls_hidden_dim),
+                nn.LeakyReLU(),
+                nn.Linear(cls_hidden_dim, n_classes),
+            )
+        )
+        self.nf_head = build_nf_head(out_dim)
+    
+    def _compute_ll(self, z, jac):
+        logpx = -0.5 * torch.sum(z**2, dim=(1,)) + jac
+        return logpx
+
+    def forward(self, x, classify=True, flow=False, enc_grad=True):
+        with nullcontext() if enc_grad else torch.no_grad():
+            feats = self.base_model(x)
+        out = ()
+        if classify:
+            cls_logits = self.cls_head(feats)
+            out += (cls_logits,)
+        if flow:
+            z = self.nf_head(feats)
+            jac = self.nf_head.jacobian(run_forward=False)
+            logpx = self._compute_ll(z, jac)
+            out += (logpx,)
+        out += (feats,)
+        return out if len(out) > 1 else out[0]
+    

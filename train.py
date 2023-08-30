@@ -72,19 +72,14 @@ def get_args():
     parser.add_argument("--resume", default=False, action='store_true', help="Resume from last ckpt")
     parser.add_argument("--label_smoothing", type=float, default=0, help="Label smoothing for loss computation")
 
-    # OpenHybrid
-    parser.add_argument("--open_hybrid", action="store_true", default=False)
-    parser.add_argument("--oh_flow_module", type=str, choices=["resflow", "coupling"], default="coupling",
-                        help="The architecture to use for the flow modue (only used in OpenHybrid)")
-    parser.add_argument("--oh_lr_multipliers", type=str, default="1-10",
-                        help="LR multipliers for classifier and flow module (only used in OpenHybrid)")
-    parser.add_argument("--oh_flow_update_freq", type=int, default=1, help="Period of steps to follow for flow module updates (only used in OpenHybrid)")
-    parser.add_argument("--oh_bind_backbone", type=str, choices=["none", "cls", "flow"], default="cls",
-                        help="Tie backbone updates to another module exclusively (only used in OpenHybrid)")
-    parser.add_argument("--oh_beta", action="store_true", default=False,
-                        help="Rescale the jacobian contribution in the flow loss")
-    parser.add_argument("--oh_backbone_only_ckpt", action="store_true", default=False,
-                        help="Only load the backbone state dict from a specified checkpoint (only used in OpenHybrid)")
+    # NF
+    parser.add_argument("--nf_head", action="store_true", default=False)
+    parser.add_argument("--nf_lr_mult", type=float, default=10,
+                        help="LR multiplier for flow head optimizer")
+    parser.add_argument("--cls_head_optim", type=str, choices=["sgd", "adam"], default="sgd",
+                        help="Optimizer to use for the classification head")
+    parser.add_argument("--bind_backbone", type=str, choices=["none", "cls", "flow"], default="cls",
+                        help="Tie backbone updates to cls or flow loss (only used in case of NF head)")
 
     # run params 
     parser.add_argument("--seed", type=int, default=42, help="Random seed for data splitting")
@@ -191,9 +186,11 @@ class Trainer:
                 import timm
                 self.output_num = 768
 
-                if self.args.open_hybrid:
+                if self.args.nf_head:
+                    from models.common import WrapperWithNF
                     # we set num_classes to 0 in order to obtain pooled feats
-                    encoder = timm.create_model("deit_base_patch16_224", pretrained=True, num_classes=0)
+                    model = timm.create_model("deit_base_patch16_224", pretrained=True, num_classes=0)
+                    self.model = WrapperWithNF(model, self.output_num, self.n_known_classes)
                 
                 elif self.args.model == "DINO":
                     # we set num_classes to 0 in order to obtain pooled feats
@@ -238,13 +235,11 @@ class Trainer:
                 self.model = WrapperWithFC(model.visual, self.output_num, self.n_known_classes, half_precision=True)
 
             elif self.args.model == "DINOv2":
+                from models.common import WrapperWithFC, WrapperWithNF
+                wrapper = WrapperWithNF if self.args.nf_head else WrapperWithFC
                 dinov2_vitb14 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14')
                 self.output_num = 1024
-                if self.args.open_hybrid:
-                    encoder = dinov2_vitb14
-                else:
-                    from models.common import WrapperWithFC
-                    self.model = WrapperWithFC(dinov2_vitb14, self.output_num, self.n_known_classes)
+                self.model = wrapper(dinov2_vitb14, self.output_num, self.n_known_classes)
 
             elif self.args.model == "CE-IM22k" or self.args.model == "CE-IM21k":
                 # https://huggingface.co/google/vit-large-patch16-224-in21k
@@ -261,14 +256,12 @@ class Trainer:
 
             # we set num_classes to 0 in order to obtain pooled feats
             import timm 
-            from models.common import WrapperWithFC
+            from models.common import WrapperWithFC, WrapperWithNF
+            wrapper = WrapperWithNF if self.args.nf_head else WrapperWithFC
             # https://huggingface.co/timm/resnetv2_101x3_bit.goog_in21k
             model = timm.create_model('resnetv2_101x3_bit.goog_in21k', pretrained=True, num_classes=0)
             self.output_num = 6144
-            if self.args.open_hybrid:
-                encoder = model
-            else:
-                self.model = WrapperWithFC(model, self.output_num, self.n_known_classes)
+            self.model = wrapper(model, self.output_num, self.n_known_classes)
 
         elif self.args.network == "resend":
             assert self.args.only_eval and ckpt is not None, "Cannot perform eval without a pretrained model"
@@ -279,27 +272,10 @@ class Trainer:
             self.output_num = self.model.output_num
         else:
             raise NotImplementedError(f"Network {self.args.network} not implemented")
-
-        if self.args.open_hybrid:
-            if "encoder" not in locals():
-                raise NotImplementedError(f"Unsupported OpenHybrid decoder {self.args.network}-{self.args.model}")
-            from models.open_hybrid import OpenHybrid
-            self.model = OpenHybrid(
-                encoder,
-                latent_dim=self.output_num,
-                cls_hidden_dim=self.output_num // 2,
-                num_classes=self.n_known_classes,
-                flow_module=self.args.oh_flow_module,
-            )
-        
+       
         if ckpt is not None:
-            model_to_load = (
-                self.model.encoder
-                if self.args.open_hybrid and self.args.oh_backbone_only_ckpt
-                else self.model
-            )
             print(f"Loading checkpoint {self.args.checkpoint_path}")
-            missing, unexpected = model_to_load.load_state_dict(clean_ckpt(ckpt, model_to_load), strict=False)
+            missing, unexpected = self.model.load_state_dict(clean_ckpt(ckpt, self.model), strict=False)
             print(f"Missing keys: {missing}, unexpected keys: {unexpected}")
 
         self.to_device(self.device)
@@ -474,9 +450,6 @@ class Trainer:
 
 
     def do_train(self):
-        if self.args.open_hybrid:
-            from models.open_hybrid import flow_update_context
-
         # prepare data 
         
         train_loader = get_train_dataloader(self.args)
@@ -499,18 +472,21 @@ class Trainer:
         self.to_train()
 
         # prepare optimizer
-        if self.args.open_hybrid:
+        if self.args.nf_head:
             optimizer = {}
             scheduler = {}
             for module_name, model, lr_mult in zip(
                 ["enc", "cls", "flow"],
-                [self.raw_model.encoder, self.raw_model.classifier, self.raw_model.flow_module],
-                [1] + [float(m) for m in self.args.oh_lr_multipliers.split("-")],
+                [self.raw_model.base_model, self.raw_model.cls_head, self.raw_model.nf_head],
+                [1] * 2 + [self.args.nf_lr_mult],
             ):
-                params, lr = model.parameters(), self.args.learning_rate * lr_mult
+                if module_name == "enc" and self.args.freeze_backbone:
+                    continue
+                params= model.parameters()
+                lr = self.args.learning_rate * lr_mult
                 optimizer[module_name] = (
                     optim.SGD(params, lr=lr, weight_decay=1e-4, momentum=0.9)
-                    if module_name == "cls"
+                    if module_name == "cls" and self.args.cls_head_optim == "sgd"
                     else optim.Adam(params, lr=lr, weight_decay=1e-5)
                 )
                 if scheduler is not None:
@@ -546,10 +522,10 @@ class Trainer:
         log_period = 10
         ckpt_period = 500
         running_loss = {"cls": 0}
-        if self.args.open_hybrid:
+        if self.args.nf_head:
             running_loss["flow"] = 0
-            update_enc_with_cls = (not self.args.freeze_backbone and self.args.oh_bind_backbone != "flow")
-            update_enc_with_flow = (not self.args.freeze_backbone and self.args.oh_bind_backbone != "cls")
+            update_enc_with_cls = (not self.args.freeze_backbone and self.args.bind_backbone != "flow")
+            update_enc_with_flow = (not self.args.freeze_backbone and self.args.bind_backbone != "cls")
 
         train_log_fn = self.get_train_log_fn(log_period)
 
@@ -567,7 +543,7 @@ class Trainer:
             images = images.to(self.device)
             labels = labels.to(self.device)
 
-            if self.args.open_hybrid: 
+            if self.args.nf_head: 
                 for optim_ in optimizer.values():
                     optim_.zero_grad()
                 # classification
@@ -580,20 +556,13 @@ class Trainer:
                     optimizer["enc"].step()
                     optimizer["enc"].zero_grad()
                 # flow
-                if it % self.args.oh_flow_update_freq == 0:
-                    beta = (
-                        it / self.args.iterations
-                        if self.args.oh_beta and scheduler is not None
-                        else 1.0
-                    )
-                    ll, _ = self.model(images, classify=False, flow=True, enc_grad=update_enc_with_flow, beta=beta)
-                    loss_flow = -torch.mean(ll) / self.output_num
-                    running_loss["flow"] += loss_flow.item()
-                    loss_flow.backward()
-                    with flow_update_context(self.raw_model.flow_module, self.args.oh_flow_update_freq):
-                        optimizer["flow"].step()
-                    if update_enc_with_flow:
-                        optimizer["enc"].step()
+                ll, _ = self.model(images, classify=False, flow=True, enc_grad=update_enc_with_flow)
+                loss_flow = -torch.mean(ll) / self.output_num
+                running_loss["flow"] += loss_flow.item()
+                loss_flow.backward()
+                optimizer["flow"].step()
+                if update_enc_with_flow:
+                    optimizer["enc"].step()
                 # schedulers
                 if scheduler is not None:
                     for sched_ in scheduler.values():
@@ -621,8 +590,7 @@ class Trainer:
                 self.save_ckpt(aux_modules, it)
 
         # save final checkpoint 
-        if self.args.save_ckpt and (not self.args.distributed or self.args.global_rank == 0):
-            self.save_ckpt()
+        self.save_ckpt()
 
 
 @record
