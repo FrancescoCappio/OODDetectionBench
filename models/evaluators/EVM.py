@@ -17,7 +17,6 @@ def EVM_evaluator(args, train_loader, test_loader, device, model, contrastive_he
     _, train_feats, train_lbls = run_model(args, model, train_loader, device, contrastive=contrastive_head, support=True)
     _, test_feats, test_lbls = run_model(args, model, test_loader, device, contrastive=contrastive_head, support=False)
 
-    r2_metric = compute_R2(train_feats, train_lbls, metric='cosine_distance' if normalize else 'euclidean_distance')
 
     # we need to divide train sample by class 
     known_labels = np.unique(train_lbls)
@@ -44,7 +43,10 @@ def EVM_evaluator(args, train_loader, test_loader, device, model, contrastive_he
 
     metrics = calc_ood_metrics(pred_prob, ood_labels)
     metrics["cs_acc"] = cs_acc
-    metrics["support_R2"] = r2_metric
+    if not args.disable_R2:
+        r2_metric = compute_R2(train_feats, train_lbls, metric='cosine_distance' if normalize else 'euclidean_distance')
+        metrics["support_R2"] = r2_metric
+
 
     return metrics 
 

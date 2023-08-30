@@ -92,7 +92,6 @@ def knn_distance_evaluator(args, train_loader, test_loader, device, model, contr
         train_feats = normalize_feats(train_feats)
         test_feats = normalize_feats(test_feats)
 
-    r2_metric = compute_R2(train_feats, train_lbls, metric='cosine_distance' if normalize else 'euclidean_distance')
 
     if cosine_sim: 
         # returns neighbours with decreasing similarity (nearest to farthest) 
@@ -117,7 +116,9 @@ def knn_distance_evaluator(args, train_loader, test_loader, device, model, contr
     cs_acc = closed_set_accuracy(test_predictions[known_mask], test_lbls[known_mask])
     metrics = calc_ood_metrics(test_normality_scores, ood_labels)
     metrics["cs_acc"] = cs_acc
-    metrics["support_R2"] = r2_metric
+    if not args.disable_R2:
+        r2_metric = compute_R2(train_feats, train_lbls, metric='cosine_distance' if normalize else 'euclidean_distance')
+        metrics["support_R2"] = r2_metric
 
     return metrics 
 

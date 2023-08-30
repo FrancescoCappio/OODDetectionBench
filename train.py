@@ -52,6 +52,7 @@ def get_args():
     # evaluators-specific parameters 
     parser.add_argument("--NNK", help="K value to use for Knn distance evaluator", type=int, default=1)
     parser.add_argument("--disable_contrastive_head", action='store_true', default=False, help="Do not use contrastive head for distance-based evaluators")
+    parser.add_argument("--disable_R2", action='store_true', default=False, help="Disable R2 computation for a slight speed up in evals")
 
     # data params
     parser.add_argument("--image_size", type=int, default=224, help="Image size")
