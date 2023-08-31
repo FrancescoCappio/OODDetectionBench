@@ -64,7 +64,7 @@ def get_args():
     # finetuning params 
     parser.add_argument("--iterations", type=int, default=100, help="Number of finetuning iterations")
     parser.add_argument("--epochs", type=int, default=-1, help="Use value >= 0 if you want to specify training length in terms of epochs")
-    parser.add_argument("--learning_rate", type=float, default=0.001, help="Learning rate for finetuning, automatically multiplied by world size")
+    parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate for finetuning, automatically multiplied by world size")
     parser.add_argument("--warmup_iters", type=int, default=0, help="Number of lr warmup iterations")
     parser.add_argument("--warmup_epochs", type=int, default=-1, help="Number of lr warmup epochs, to use when train len specified with epochs")
     parser.add_argument("--freeze_backbone", action="store_true", default=False, help="Train only cls head during finetuning")
@@ -76,10 +76,6 @@ def get_args():
     parser.add_argument("--nf_head", action="store_true", default=False)
     parser.add_argument("--nf_lr_mult", type=float, default=10,
                         help="LR multiplier for flow head optimizer")
-    parser.add_argument("--cls_head_optim", type=str, choices=["sgd", "adam"], default="sgd",
-                        help="Optimizer to use for the classification head")
-    parser.add_argument("--bind_backbone", type=str, choices=["none", "cls", "flow"], default="cls",
-                        help="Tie backbone updates to cls or flow loss (only used in case of NF head)")
 
     # run params 
     parser.add_argument("--seed", type=int, default=42, help="Random seed for data splitting")
@@ -414,16 +410,15 @@ class Trainer:
 
     def get_train_log_fn(self, loss_divider):
         def get_suffixes(name):
-            return (f"({name}) ", f"_{name}") if name else (" ", "")
+            return (f"({name}) ", f"_{name}") if name else ("", "")
 
-        def do_logging(it, optimizer, running_losses, train_acc):
-            if not isinstance(optimizer, dict): # wrap in dict
-                optimizer = {"": optimizer}
+        def do_logging(it, optims_dict, losses_dict, train_acc):
             wandb_data = {}
             log_msg = [f"Iterations: {it+1:6d}/{self.args.iterations}"]
             # LR
             msg = ""
-            for name, optim_ in optimizer.items():
+            for name, optim_ in optims_dict.items():
+                if msg: msg += ", "
                 current_lr = optim_.param_groups[0]["lr"]
                 log_suffix, wandb_suffix = get_suffixes(name)
                 msg += f"{current_lr:.6f}{log_suffix}"
@@ -431,7 +426,8 @@ class Trainer:
             log_msg.append(f"LR: {msg}")
             # Loss
             msg = ""
-            for name, loss_ in running_losses.items():
+            for name, loss_ in losses_dict.items():
+                if msg: msg += ", "
                 avg_loss = loss_ / loss_divider
                 log_suffix, wandb_suffix = get_suffixes(name)
                 msg += f"{avg_loss:6.4f}{log_suffix}"
@@ -472,39 +468,32 @@ class Trainer:
         self.to_train()
 
         # prepare optimizer
-        if self.args.nf_head:
-            optimizer = {}
-            scheduler = {}
-            for module_name, model, lr_mult in zip(
-                ["enc", "cls", "flow"],
-                [self.raw_model.base_model, self.raw_model.cls_head, self.raw_model.nf_head],
-                [1] * 2 + [self.args.nf_lr_mult],
-            ):
-                if module_name == "enc" and self.args.freeze_backbone:
-                    continue
-                params= model.parameters()
-                lr = self.args.learning_rate * lr_mult
-                optimizer[module_name] = (
-                    optim.SGD(params, lr=lr, weight_decay=1e-4, momentum=0.9)
-                    if module_name == "cls" and self.args.cls_head_optim == "sgd"
-                    else optim.Adam(params, lr=lr, weight_decay=1e-5)
-                )
-                if scheduler is not None:
-                    scheduler[module_name] = LinearWarmupCosineAnnealingLR(optimizer[module_name], warmup_epochs=self.args.warmup_iters, max_epochs=self.args.iterations)
+        if self.args.freeze_backbone:
+            if hasattr(self.raw_model, "fc"):
+                optim_params = self.raw_model.fc.parameters()
+            elif hasattr(self.raw_model, "base_model") and hasattr(self.raw_model.base_model, "fc"):
+                optim_params = self.raw_model.base_model.fc.parameters()
+            else:
+                raise NotImplementedError("Don't know how to access fc")
+        elif self.args.nf_head:
+            optim_params = self.raw_model.cls_parameters()
         else:
             optim_params = self.model.parameters()
-            if self.args.freeze_backbone:
-                if hasattr(self.model, "fc"):
-                    optim_params = self.model.fc.parameters()
-                elif hasattr(self.model, "base_model") and hasattr(self.model.base_model, "fc"):
-                    optim_params = self.model.base_model.fc.parameters()
-                else:
-                    raise NotImplementedError("Don't know how to access fc")
-            optimizer = optim.SGD(optim_params, weight_decay=.0005, momentum=.9, lr=self.args.learning_rate)
-            scheduler = LinearWarmupCosineAnnealingLR(optimizer, warmup_epochs=self.args.warmup_iters, max_epochs=self.args.iterations)
+
+        def get_scheduler(optim_):
+            return LinearWarmupCosineAnnealingLR(optim_, warmup_epochs=self.args.warmup_iters, max_epochs=self.args.iterations)
+
+        optimizer = optim.AdamW(optim_params, lr=self.args.learning_rate, weight_decay=1e-5)
+        scheduler = get_scheduler(optimizer)
+        if self.args.nf_head:
+            optimizer_nf = optim.AdamW(self.raw_model.nf.parameters(), lr=self.args.learning_rate * self.args.nf_lr_mult,
+                                       betas=(0.8, 0.8), eps=1e-4, weight_decay=1e-5)
+            scheduler_nf = get_scheduler(optimizer_nf)
 
         if self.args.resume:
             aux_modules = get_aux_modules_dict(optimizer, scheduler)
+            if self.args.nf_head:
+                aux_modules.update(get_aux_modules_dict(optimizer_nf, scheduler_nf, suffix="nf"))
             resume_possible, resume_it = self.resume(aux_modules)
             if not resume_possible:
                 print("Cannot resume, ckpt does not exist or is not complete")
@@ -521,11 +510,9 @@ class Trainer:
         train_iter = iter(train_loader)
         log_period = 10
         ckpt_period = 500
-        running_loss = {"cls": 0}
+        running_loss = 0
         if self.args.nf_head:
-            running_loss["flow"] = 0
-            update_enc_with_cls = (not self.args.freeze_backbone and self.args.bind_backbone != "flow")
-            update_enc_with_flow = (not self.args.freeze_backbone and self.args.bind_backbone != "cls")
+            running_loss_nf = 0
 
         train_log_fn = self.get_train_log_fn(log_period)
 
@@ -543,50 +530,43 @@ class Trainer:
             images = images.to(self.device)
             labels = labels.to(self.device)
 
-            if self.args.nf_head: 
-                for optim_ in optimizer.values():
-                    optim_.zero_grad()
-                # classification
-                outputs, _ = self.model(images, enc_grad=update_enc_with_cls)
-                loss_cls = loss_fn(outputs, labels)
-                running_loss["cls"] += loss_cls.item()
-                loss_cls.backward()
-                optimizer["cls"].step()
-                if update_enc_with_cls:
-                    optimizer["enc"].step()
-                    optimizer["enc"].zero_grad()
-                # flow
-                ll, _ = self.model(images, classify=False, flow=True, enc_grad=update_enc_with_flow)
-                loss_flow = -torch.mean(ll) / self.output_num
-                running_loss["flow"] += loss_flow.item()
-                loss_flow.backward()
-                optimizer["flow"].step()
-                if update_enc_with_flow:
-                    optimizer["enc"].step()
-                # schedulers
-                if scheduler is not None:
-                    for sched_ in scheduler.values():
-                        sched_.step()
-            else:
-                outputs, _ = self.model(images)
-                loss = loss_fn(outputs, labels)
-                optimizer.zero_grad()
-                loss.backward()
-                if self.args.clip_grad > 0:
-                    torch.nn.utils.clip_grad_value_(self.model.parameters(), self.args.clip_grad)
-                optimizer.step()
-                scheduler.step()
-                running_loss["cls"] += loss.item()
+            outputs, _ = self.model(images)
+            loss = loss_fn(outputs, labels)
+            optimizer.zero_grad()
+            loss.backward()
+            if self.args.clip_grad > 0:
+                params = self.raw_model.cls_parameters() if self.args.nf_head else self.model.parameters()
+                torch.nn.utils.clip_grad_value_(params, self.args.clip_grad)
+            optimizer.step()
+            scheduler.step()
+            running_loss += loss.item()
+            # flow
+            if self.args.nf_head:
+                ll, _ = self.model(images, classify=False, flow=True, backbone_grad=False)
+                loss_nf = -torch.mean(ll) / self.output_num
+                optimizer_nf.zero_grad()
+                loss_nf.backward()
+                optimizer_nf.step()
+                scheduler_nf.step()
+                running_loss_nf += loss_nf.item()
 
             if (it+1) % log_period == 0:
                 _, preds = outputs.max(dim=1)
                 train_acc = ((preds == labels).sum()/len(preds)).cpu().item()
-                train_log_fn(it, optimizer, running_loss, train_acc)
-                for loss_name in running_loss:
-                    running_loss[loss_name] = 0
+                optims_dict = {"": optimizer}
+                losses_dict = {"": running_loss}
+                if self.args.nf_head:
+                    optims_dict["nf"] = optimizer_nf
+                    losses_dict["nf"] = running_loss_nf
+                train_log_fn(it, optims_dict, losses_dict, train_acc)
+                running_loss = 0
+                if self.args.nf_head:
+                    running_loss_nf = 0
 
             if (it+1) % ckpt_period == 0:
                 aux_modules = get_aux_modules_dict(optimizer, scheduler)
+                if self.args.nf_head:
+                    aux_modules.update(get_aux_modules_dict(optimizer_nf, scheduler_nf, suffix="nf"))
                 self.save_ckpt(aux_modules, it)
 
         # save final checkpoint 

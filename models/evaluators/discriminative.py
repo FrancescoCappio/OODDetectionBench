@@ -210,7 +210,7 @@ def _estimate_react_thres(args, model, loader, device, id_percentile=0.9):
     return feats
 
 @torch.no_grad()
-def _iterate_data_react(model, classifier, loader, device, threshold=1, energy_temper=1):
+def _iterate_data_react(model, loader, device, threshold=1, energy_temper=1):
     confs = []
     gt_list = []
 
@@ -223,7 +223,7 @@ def _iterate_data_react(model, classifier, loader, device, threshold=1, energy_t
         _, feats = model(images)
         # apply react
         x = feats.clip(max=threshold)
-        logits = classifier(x)
+        logits = model.fc(x)
 
         # apply energy 
         conf = energy_temper * torch.logsumexp(logits / energy_temper, dim=1)
@@ -235,14 +235,12 @@ def _iterate_data_react(model, classifier, loader, device, threshold=1, energy_t
 def react_evaluator(args, train_loader, test_loader, device, model):
     # implements neurips 2021: https://proceedings.neurips.cc/paper/2021/hash/01894d6f048493d2cacde3c579c315a3-Abstract.html
 
-    classifier = model.classifier if args.open_hybrid else model.fc
-    
     train_lbls = train_loader.dataset.labels
     # ood labels have 1 for known samples and 0 for unknown ones
     known_labels = torch.unique(torch.tensor(train_lbls))
 
     threshold = _estimate_react_thres(args, model, train_loader, device)
-    normality_scores, test_labels = _iterate_data_react(model, classifier, test_loader, device, threshold=threshold)
+    normality_scores, test_labels = _iterate_data_react(model, test_loader, device, threshold=threshold)
     ood_labels = prepare_ood_labels(known_labels, test_labels)
 
     print(f"Num known: {ood_labels.sum()}. Num unknown: {len(test_labels) - ood_labels.sum()}.")

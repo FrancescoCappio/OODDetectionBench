@@ -54,9 +54,7 @@ def clean_ckpt(ckpt, model):
             elif k.startswith("encoder"):
                 new_k = k.replace("encoder", "base_model")
             elif k.startswith("flow_module"):
-                new_k = k.replace("flow_module", "nf_head")
-            elif k.startswith("classifier"):
-                new_k = k.replace("classifier", "cls_head")
+                new_k = k.replace("flow_module", "nf")
             ###
             new_dict[new_k] = ckpt[k]
         else:
@@ -64,17 +62,13 @@ def clean_ckpt(ckpt, model):
     return new_dict
 
 
-def get_aux_modules_dict(optimizer, scheduler):
+def get_aux_modules_dict(optimizer, scheduler, suffix=""):
     """
-    Wrap optimizers and schedulers in a dict to save and load checkpoints
+    Wrap optimizer and scheduler in a dict to save and load checkpoints
     """
     aux_modules = {}
     for module_type, module in zip(["optimizer", "scheduler"], [optimizer, scheduler]):
         if module is not None:
-            # module can be a dict of modules; in this case, flatten it
-            if isinstance(module, dict):
-                for k, v in module.items():
-                    aux_modules[f"{module_type}_{k}"] = v
-            else:
-                aux_modules[module_type] = module
+            name = f"{module_type}_{suffix}" if suffix else module_type
+            aux_modules[name] = module
     return aux_modules
