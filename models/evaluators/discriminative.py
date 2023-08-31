@@ -214,6 +214,13 @@ def _iterate_data_react(model, loader, device, threshold=1, energy_temper=1):
     confs = []
     gt_list = []
 
+    if hasattr(model, "fc"):
+        fc = model.fc
+    elif hasattr(model, "base_model") and hasattr(model.base_model, "fc"):
+        fc = model.base_model.fc
+    else:
+        raise NotImplementedError("Don't know how to access fc")
+
     for batch in tqdm(loader):
         images, labels = batch 
         images = images.to(device)
@@ -223,7 +230,7 @@ def _iterate_data_react(model, loader, device, threshold=1, energy_temper=1):
         _, feats = model(images)
         # apply react
         x = feats.clip(max=threshold)
-        logits = model.fc(x)
+        logits = fc(x)
 
         # apply energy 
         conf = energy_temper * torch.logsumexp(logits / energy_temper, dim=1)

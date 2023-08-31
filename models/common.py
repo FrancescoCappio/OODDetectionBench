@@ -157,25 +157,36 @@ class WrapperWithFC(nn.Module):
 
 
 class WrapperWithNF(nn.Module):
-    def __init__(self, base_model, out_dim, n_classes):
+    def __init__(self, base_model, out_dim, n_classes=0, add_cls_head=True):
         super().__init__()
+        self.add_cls_head = add_cls_head
         self.base_model = base_model
-        self.fc = nn.Linear(out_dim, n_classes)
         self.nf = build_nf_head(out_dim)
-    
+        if add_cls_head:
+            if n_classes <= 0:
+                raise AssertionError("Specify number of classes for cls head")
+            self.fc = nn.Linear(out_dim, n_classes)
+
     def _compute_ll(self, z, jac):
         logpx = -0.5 * torch.sum(z**2, dim=(1,)) + jac
         return logpx
 
     def cls_parameters(self):
-        return chain(self.base_model.parameters(), self.fc.parameters())
+        base_params = self.base_model.parameters()
+        return chain(base_params, self.fc.parameters()) if self.add_cls_head else base_params
 
     def forward(self, x, classify=True, flow=False, backbone_grad=True):
         with nullcontext() if backbone_grad else torch.no_grad():
-            feats = self.base_model(x)
+            base_out = self.base_model(x)
+        if self.add_cls_head:
+            feats = base_out
+        else:
+            logits, feats = base_out
+
         out = ()
         if classify:
-            logits = self.fc(feats)
+            if self.add_cls_head:
+                logits = self.fc(feats)
             out += (logits,)
         if flow:
             z = self.nf(feats)
@@ -183,5 +194,5 @@ class WrapperWithNF(nn.Module):
             logpx = self._compute_ll(z, jac)
             out += (logpx,)
         out += (feats,)
+
         return out if len(out) > 1 else out[0]
-    

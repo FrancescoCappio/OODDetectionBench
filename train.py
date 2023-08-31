@@ -180,30 +180,28 @@ class Trainer:
         elif self.args.network == "vit":
             if self.args.model in ["CE", "DINO"]:
 
-                if self.args.model == "DINO" and not self.args.checkpoint_path:
-                    raise AssertionError("Specify ckpt for DINO")
-
                 import timm
                 self.output_num = 768
 
-                if self.args.nf_head:
-                    from models.common import WrapperWithNF
-                    # we set num_classes to 0 in order to obtain pooled feats
-                    model = timm.create_model("deit_base_patch16_224", pretrained=True, num_classes=0)
-                    self.model = WrapperWithNF(model, self.output_num, self.n_known_classes)
-                
-                elif self.args.model == "DINO":
+                if self.args.model == "DINO":
+                    if not self.args.checkpoint_path:
+                        raise AssertionError("Specify ckpt for DINO")
+
                     # we set num_classes to 0 in order to obtain pooled feats
                     model = timm.create_model("deit_base_patch16_224", pretrained=True, num_classes=0)
 
-                    # if we didn't need the contrastive head we could use the model from huggingface:
-                    # https://huggingface.co/facebook/dino-vitb16
-                    self.contrastive_enabled = not args.disable_contrastive_head
-                    from models.common import WrapperWithContrastiveHead
-                    self.model = WrapperWithContrastiveHead(model, out_dim=self.output_num, contrastive_type="DINO", 
-                                                            add_cls_head=True, n_classes=self.n_known_classes)
-                    if not args.disable_contrastive_head:
-                        self.output_num = self.model.contrastive_out_dim
+                    if self.args.nf_head:
+                        from models.common import WrapperWithNF
+                        self.model = WrapperWithNF(model, self.output_num, self.n_known_classes)
+                    else:
+                        # if we didn't need the contrastive head we could use the model from huggingface:
+                        # https://huggingface.co/facebook/dino-vitb16
+                        self.contrastive_enabled = not args.disable_contrastive_head
+                        from models.common import WrapperWithContrastiveHead
+                        self.model = WrapperWithContrastiveHead(model, out_dim=self.output_num, contrastive_type="DINO", 
+                                                                add_cls_head=True, n_classes=self.n_known_classes)
+                        if not args.disable_contrastive_head:
+                            self.output_num = self.model.contrastive_out_dim
 
                 else:
                     import types 
@@ -221,7 +219,12 @@ class Trainer:
                         return logits, feats
 
                     model.forward = types.MethodType(my_forward, model)
-                    self.model = model 
+
+                    if self.args.nf_head:
+                        from models.common import WrapperWithNF
+                        self.model = WrapperWithNF(model, self.output_num, add_cls_head=False)
+                    else:
+                        self.model = model 
 
             elif self.args.model == "clip":
                 # ViT-B/16
