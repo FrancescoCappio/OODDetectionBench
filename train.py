@@ -76,6 +76,7 @@ def get_args():
     parser.add_argument("--nf_head", action="store_true", default=False)
     parser.add_argument("--nf_lr_mult", type=float, default=10,
                         help="LR multiplier for flow head optimizer")
+    parser.add_argument("--nf_clip_grad", default=-1, type=float, help="If > 0 used as clip grad value (for NF head)")
 
     # run params 
     parser.add_argument("--seed", type=int, default=42, help="Random seed for data splitting")
@@ -536,7 +537,7 @@ class Trainer:
             loss.backward()
             if self.args.clip_grad > 0:
                 params = self.raw_model.cls_parameters() if self.args.nf_head else self.model.parameters()
-                torch.nn.utils.clip_grad_value_(params, self.args.clip_grad)
+                nn.utils.clip_grad_value_(params, self.args.clip_grad)
             optimizer.step()
             scheduler.step()
             running_loss += loss.item()
@@ -546,6 +547,8 @@ class Trainer:
                 loss_nf = -torch.mean(ll) / self.output_num
                 optimizer_nf.zero_grad()
                 loss_nf.backward()
+                if self.args.nf_clip_grad > 0:
+                    nn.utils.clip_grad_value_(self.raw_model.nf.parameters(), self.args.nf_clip_grad)
                 optimizer_nf.step()
                 scheduler_nf.step()
                 running_loss_nf += loss_nf.item()
