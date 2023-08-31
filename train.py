@@ -180,6 +180,9 @@ class Trainer:
         elif self.args.network == "vit":
             if self.args.model in ["CE", "DINO"]:
 
+                if self.args.model == "DINO" and not self.args.checkpoint_path:
+                    raise AssertionError("Specify ckpt for DINO")
+
                 import timm
                 self.output_num = 768
 
