@@ -47,6 +47,7 @@ def clean_ckpt(ckpt, model):
     new_dict = {}
     model_dict = model.state_dict()
     for k in ckpt.keys():
+        new_k = k
         if k not in model_dict:
             if k.startswith("base_model"):
                 new_k = k.replace("base_model.", "")
@@ -56,9 +57,7 @@ def clean_ckpt(ckpt, model):
             elif k.startswith("flow_module"):
                 new_k = k.replace("flow_module", "nf")
             ###
-            new_dict[new_k] = ckpt[k]
-        else:
-            new_dict[k] = ckpt[k]
+        new_dict[new_k] = ckpt[k]
     return new_dict
 
 
