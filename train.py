@@ -46,7 +46,7 @@ def get_args():
                                                                     "resend", "DINOv2", "BiT", "CE-IM22k", "random_init", "CE-IM21k"])
     parser.add_argument("--evaluator", type=str, help="Strategy to compute normality scores", default="prototypes_distance",
                         choices=["prototypes_distance", "MSP", "MLS", "ODIN", "energy", "gradnorm", "mahalanobis", "gram", "knn_distance",
-                                 "linear_probe", "MCM", "knn_ood", "resend", "react", "EVM", "EVM_norm"])
+                                 "linear_probe", "MCM", "knn_ood", "resend", "react", "EVM", "EVM_norm", "ASH"])
 
     # evaluators-specific parameters 
     parser.add_argument("--NNK", help="K value to use for Knn distance evaluator", type=int, default=1)
@@ -349,6 +349,10 @@ class Trainer:
 
         elif self.args.evaluator == "resend":
             metrics = resend_evaluator(args,train_loader=self.support_test_loader, test_loader=self.target_loader,
+                                                    device=self.device, model=self.model)
+
+        elif self.args.evaluator == "ASH":
+            metrics = ASH_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
 
         else:
