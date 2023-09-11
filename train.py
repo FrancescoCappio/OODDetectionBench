@@ -47,11 +47,12 @@ def get_args():
                                                                     "resend", "DINOv2", "BiT", "CE-IM22k", "random_init", "CE-IM21k"])
     parser.add_argument("--evaluator", type=str, help="Strategy to compute normality scores", default="prototypes_distance",
                         choices=["prototypes_distance", "MSP", "MLS", "ODIN", "energy", "gradnorm", "mahalanobis", "gram", "knn_distance",
-                                 "linear_probe", "MCM", "knn_ood", "resend", "react"])
+                                 "linear_probe", "MCM", "knn_ood", "resend", "react", "EVM", "EVM_norm", "ASH"])
 
     # evaluators-specific parameters 
     parser.add_argument("--NNK", help="K value to use for Knn distance evaluator", type=int, default=1)
     parser.add_argument("--disable_contrastive_head", action='store_true', default=False, help="Do not use contrastive head for distance-based evaluators")
+    parser.add_argument("--disable_R2", action='store_true', default=False, help="Disable R2 computation for a slight speed up in evals")
 
     # data params
     parser.add_argument("--image_size", type=int, default=224, help="Image size")
@@ -334,6 +335,14 @@ class Trainer:
             metrics = linear_probe_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                             device=self.device, model=self.model, contrastive_head=self.contrastive_enabled)
 
+        elif self.args.evaluator == "EVM":
+            metrics = EVM_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
+                                            device=self.device, model=self.model, contrastive_head=self.contrastive_enabled)
+
+        elif self.args.evaluator == "EVM_norm":
+            metrics = EVM_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
+                                            device=self.device, model=self.model, contrastive_head=self.contrastive_enabled, normalize=True)
+
         elif self.args.evaluator == "MCM":
             assert self.args.model == "clip", "MCM evaluator supports only clip based models!"
             metrics = MCM_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
@@ -343,11 +352,17 @@ class Trainer:
             metrics = resend_evaluator(args,train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
 
+        elif self.args.evaluator == "ASH":
+            metrics = ASH_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
+                                                    device=self.device, model=self.model)
+
         else:
             raise NotImplementedError(f"Unknown evaluator {self.args.evaluator}")
 
         if "cs_acc" in metrics:
             print(f"Closed set accuracy: {metrics['cs_acc']:.4f}")
+        if "support_R2" in metrics:
+            print(f"Support set R2 score: {metrics['support_R2']:.4f}")
 
         auroc = metrics["auroc"]
         fpr_auroc = metrics["fpr_at_95_tpr"]
