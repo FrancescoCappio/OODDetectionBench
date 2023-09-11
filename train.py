@@ -74,8 +74,7 @@ def get_args():
 
     # NF
     parser.add_argument("--nf_head", action="store_true", default=False)
-    parser.add_argument("--nf_lr_mult", type=float, default=10,
-                        help="LR multiplier for flow head optimizer")
+    parser.add_argument("--nf_lr_mult", type=float, default=1, help="LR multiplier for flow head optimizer")
     parser.add_argument("--nf_clip_grad", default=-1, type=float, help="If > 0 used as clip grad value (for NF head)")
 
     # run params 
@@ -487,15 +486,14 @@ class Trainer:
         else:
             optim_params = self.model.parameters()
 
-        def get_scheduler(optim_):
-            return LinearWarmupCosineAnnealingLR(optim_, warmup_epochs=self.args.warmup_iters, max_epochs=self.args.iterations)
+        def get_optim_sched(params, lr):
+            optim_ = optim.Adam(params, lr=lr, weight_decay=1e-5)
+            sched_ = LinearWarmupCosineAnnealingLR(optim_, warmup_epochs=self.args.warmup_iters, max_epochs=self.args.iterations)
+            return optim_, sched_
 
-        optimizer = optim.AdamW(optim_params, lr=self.args.learning_rate, weight_decay=1e-5)
-        scheduler = get_scheduler(optimizer)
+        optimizer, scheduler = get_optim_sched(optim_params, self.args.learning_rate)
         if self.args.nf_head:
-            optimizer_nf = optim.AdamW(self.raw_model.nf.parameters(), lr=self.args.learning_rate * self.args.nf_lr_mult,
-                                       betas=(0.8, 0.8), eps=1e-4, weight_decay=1e-5)
-            scheduler_nf = get_scheduler(optimizer_nf)
+            optimizer_nf, scheduler_nf = get_optim_sched(self.raw_model.nf.parameters(), self.args.learning_rate * self.args.nf_lr_mult)
 
         if self.args.resume:
             aux_modules = get_aux_modules_dict(optimizer, scheduler)
