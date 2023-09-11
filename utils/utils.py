@@ -71,3 +71,13 @@ def get_aux_modules_dict(optimizer, scheduler, suffix=""):
             name = f"{module_type}_{suffix}" if suffix else module_type
             aux_modules[name] = module
     return aux_modules
+
+
+def interpolate_ckpts(zeroshot_ckpt, finetuned_ckpt, alpha):
+    # make sure checkpoints are compatible
+    assert set(zeroshot_ckpt.keys()) == set(finetuned_ckpt.keys())
+    # interpolate between all weights in the checkpoints
+    new_state_dict = {
+        k: (1-alpha) * zeroshot_ckpt[k] + alpha * finetuned_ckpt[k] for k in zeroshot_ckpt.keys()
+    }
+    return new_state_dict

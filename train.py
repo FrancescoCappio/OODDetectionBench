@@ -4,7 +4,6 @@ import sys
 from os.path import join
 from os import environ
 
-import numpy as np
 import torch
 from torch import nn, optim
 from torch.nn.parallel import DistributedDataParallel as DDP 
@@ -15,7 +14,7 @@ from models.resnet import get_resnet
 from models.data_helper import get_eval_dataloader, get_train_dataloader, split_train_loader, check_data_consistency
 from utils.log_utils import count_parameters, LogUnbuffered
 from utils.optim import LinearWarmupCosineAnnealingLR
-from utils.utils import clean_ckpt, get_aux_modules_dict
+from utils.utils import clean_ckpt, get_aux_modules_dict, interpolate_ckpts
 from utils.dist_utils import is_main_process
 from models.evaluators import *
 
@@ -84,6 +83,7 @@ def get_args():
     parser.add_argument("--only_eval", action='store_true', default=False,
                         help="If you want only to evaluate a checkpoint")
     parser.add_argument("--checkpoint_path", type=str, default="", help="Path to pretrained checkpoint")
+    parser.add_argument("--wise_ft_alpha", type=float, default=1.0, help="Alpha value for WiSE-FT interpolation")
 
     # output_folder for checkpoints
     parser.add_argument("--save_ckpt", action='store_true', default=False, help="Should save the training output checkpoint to --output_dir?")
@@ -274,11 +274,16 @@ class Trainer:
             self.output_num = self.model.output_num
         else:
             raise NotImplementedError(f"Network {self.args.network} not implemented")
-       
+
         if ckpt is not None:
             print(f"Loading checkpoint {self.args.checkpoint_path}")
-            missing, unexpected = self.model.load_state_dict(clean_ckpt(ckpt, self.model), strict=False)
-            print(f"Missing keys: {missing}, unexpected keys: {unexpected}")
+            if self.args.wise_ft_alpha < 1:
+                print(f"Interpolating weights with alpha={self.args.wise_ft_alpha}")
+                self.to_device(self.device)
+                self.model.load_state_dict(interpolate_ckpts(self.model.state_dict(), ckpt, self.args.wise_ft_alpha))
+            else:
+                missing, unexpected = self.model.load_state_dict(clean_ckpt(ckpt, self.model), strict=False)
+                print(f"Missing keys: {missing}, unexpected keys: {unexpected}")
 
         self.to_device(self.device)
         self.args.output_num = self.output_num
