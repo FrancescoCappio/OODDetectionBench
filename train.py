@@ -615,8 +615,6 @@ def main():
         print("Process rank", args.global_rank, "starting")
 
     if args.output_dir and is_main_process(args):
-        if args.suffix:
-            args.output_dir += f"_{args.suffix}"
         if not args.resume:
             assert not os.path.exists(args.output_dir), f"Output dir {args.output_dir} already exists, stopping to avoid overwriting"
         if not os.path.exists(args.output_dir):
