@@ -5,5 +5,6 @@ from .gram import gram_evaluator
 from .linear_probe import linear_probe_evaluator
 from .mcm import MCM_evaluator
 from .resend import resend_evaluator
+from .flow import flow_evaluator
 from .EVM import EVM_evaluator
 from .ash import ASH_evaluator

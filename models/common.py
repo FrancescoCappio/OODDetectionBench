@@ -1,7 +1,13 @@
+from contextlib import nullcontext
+from itertools import chain
+
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
+
 from utils.utils import trunc_normal_
+
+from .nf import build_nf_head
 
 BATCH_NORM_EPSILON = 1e-5
 
@@ -148,3 +154,45 @@ class WrapperWithFC(nn.Module):
         if self.base_output_map:
             feats = self.base_output_map(feats)
         return self.fc(feats), feats
+
+
+class WrapperWithNF(nn.Module):
+    def __init__(self, base_model, out_dim, n_classes=0, add_cls_head=True):
+        super().__init__()
+        self.add_cls_head = add_cls_head
+        self.base_model = base_model
+        self.nf = build_nf_head(out_dim)
+        if add_cls_head:
+            if n_classes <= 0:
+                raise AssertionError("Specify number of classes for cls head")
+            self.fc = nn.Linear(out_dim, n_classes)
+
+    def _compute_ll(self, z, jac):
+        logpx = -0.5 * torch.sum(z**2, dim=(1,)) + jac
+        return logpx
+
+    def cls_parameters(self):
+        base_params = self.base_model.parameters()
+        return chain(base_params, self.fc.parameters()) if self.add_cls_head else base_params
+
+    def forward(self, x, classify=True, flow=False, backbone_grad=True):
+        with nullcontext() if backbone_grad else torch.no_grad():
+            base_out = self.base_model(x)
+        if self.add_cls_head:
+            feats = base_out
+        else:
+            logits, feats = base_out
+
+        out = ()
+        if classify:
+            if self.add_cls_head:
+                logits = self.fc(feats)
+            out += (logits,)
+        if flow:
+            z = self.nf(feats)
+            jac = self.nf.jacobian(run_forward=False)
+            logpx = self._compute_ll(z, jac)
+            out += (logpx,)
+        out += (feats,)
+
+        return out if len(out) > 1 else out[0]

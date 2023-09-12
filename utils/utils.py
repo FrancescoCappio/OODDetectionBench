@@ -43,16 +43,46 @@ def trunc_normal_(tensor, mean=0., std=1., a=-2., b=2.):
     # type: (Tensor, float, float, float, float) -> Tensor
     return _no_grad_trunc_normal_(tensor, mean, std, a, b)
 
+
 def clean_ckpt(ckpt, model):
     new_dict = {}
     model_dict = model.state_dict()
     for k in ckpt.keys():
-        if k not in model_dict and k.startswith("base_model"):
-            new_k = k.replace("base_model.","")
-            new_dict[new_k] = ckpt[k]
-        else:
-            new_dict[k] = ckpt[k]
+        new_k = k
+        if k not in model_dict:
+            if k.startswith("base_model"):
+                new_k = k.replace("base_model.", "")
+            ### NF Hybrid models
+            elif k.startswith("encoder"):
+                new_k = k.replace("encoder", "base_model")
+            elif k.startswith("flow_module"):
+                new_k = k.replace("flow_module", "nf")
+            ###
+        new_dict[new_k] = ckpt[k]
     return new_dict
+
+
+def get_aux_modules_dict(optimizer, scheduler, suffix=""):
+    """
+    Wrap optimizer and scheduler in a dict to save and load checkpoints
+    """
+    aux_modules = {}
+    for module_type, module in zip(["optimizer", "scheduler"], [optimizer, scheduler]):
+        if module is not None:
+            name = f"{module_type}_{suffix}" if suffix else module_type
+            aux_modules[name] = module
+    return aux_modules
+
+
+def interpolate_ckpts(zeroshot_ckpt, finetuned_ckpt, alpha):
+    # make sure checkpoints are compatible
+    assert set(zeroshot_ckpt.keys()) == set(finetuned_ckpt.keys())
+    # interpolate between all weights in the checkpoints
+    new_state_dict = {
+        k: (1-alpha) * zeroshot_ckpt[k] + alpha * finetuned_ckpt[k] for k in zeroshot_ckpt.keys()
+    }
+    return new_state_dict
+
 
 @torch.no_grad()
 def compute_sets_distance(feats1, feats2, metric="cosine_distance"):

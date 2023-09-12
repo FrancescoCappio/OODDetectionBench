@@ -214,6 +214,13 @@ def _iterate_data_react(model, loader, device, threshold=1, energy_temper=1):
     confs = []
     gt_list = []
 
+    if hasattr(model, "fc"):
+        fc = model.fc
+    elif hasattr(model, "base_model") and hasattr(model.base_model, "fc"):
+        fc = model.base_model.fc
+    else:
+        raise NotImplementedError("Don't know how to access fc")
+
     for batch in tqdm(loader):
         images, labels = batch 
         images = images.to(device)
@@ -223,7 +230,7 @@ def _iterate_data_react(model, loader, device, threshold=1, energy_temper=1):
         _, feats = model(images)
         # apply react
         x = feats.clip(max=threshold)
-        logits = model.fc(x)
+        logits = fc(x)
 
         # apply energy 
         conf = energy_temper * torch.logsumexp(logits / energy_temper, dim=1)
@@ -234,7 +241,7 @@ def _iterate_data_react(model, loader, device, threshold=1, energy_temper=1):
 
 def react_evaluator(args, train_loader, test_loader, device, model):
     # implements neurips 2021: https://proceedings.neurips.cc/paper/2021/hash/01894d6f048493d2cacde3c579c315a3-Abstract.html
-    
+
     train_lbls = train_loader.dataset.labels
     # ood labels have 1 for known samples and 0 for unknown ones
     known_labels = torch.unique(torch.tensor(train_lbls))

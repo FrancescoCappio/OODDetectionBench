@@ -14,7 +14,7 @@ from models.resnet import get_resnet
 from models.data_helper import get_eval_dataloader, get_train_dataloader, split_train_loader, check_data_consistency
 from utils.log_utils import count_parameters, LogUnbuffered
 from utils.optim import LinearWarmupCosineAnnealingLR
-from utils.utils import clean_ckpt
+from utils.utils import clean_ckpt, get_aux_modules_dict, interpolate_ckpts
 from utils.dist_utils import is_main_process
 from models.evaluators import *
 
@@ -47,7 +47,7 @@ def get_args():
                                                                     "resend", "DINOv2", "BiT", "CE-IM22k", "random_init", "CE-IM21k"])
     parser.add_argument("--evaluator", type=str, help="Strategy to compute normality scores", default="prototypes_distance",
                         choices=["prototypes_distance", "MSP", "MLS", "ODIN", "energy", "gradnorm", "mahalanobis", "gram", "knn_distance",
-                                 "linear_probe", "MCM", "knn_ood", "resend", "react", "EVM", "EVM_norm", "ASH"])
+                                 "linear_probe", "MCM", "knn_ood", "resend", "react", "flow", "EVM", "EVM_norm", "ASH"])
 
     # evaluators-specific parameters 
     parser.add_argument("--NNK", help="K value to use for Knn distance evaluator", type=int, default=1)
@@ -64,14 +64,18 @@ def get_args():
     # finetuning params 
     parser.add_argument("--iterations", type=int, default=100, help="Number of finetuning iterations")
     parser.add_argument("--epochs", type=int, default=-1, help="Use value >= 0 if you want to specify training length in terms of epochs")
-    parser.add_argument("--learning_rate", type=float, default=0.001, help="Learning rate for finetuning, automatically multiplied by world size")
+    parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate for finetuning, automatically multiplied by world size")
     parser.add_argument("--warmup_iters", type=int, default=0, help="Number of lr warmup iterations")
     parser.add_argument("--warmup_epochs", type=int, default=-1, help="Number of lr warmup epochs, to use when train len specified with epochs")
     parser.add_argument("--freeze_backbone", action="store_true", default=False, help="Train only cls head during finetuning")
     parser.add_argument("--clip_grad", default=-1, type=float, help="If > 0 used as clip grad value")
     parser.add_argument("--resume", default=False, action='store_true', help="Resume from last ckpt")
-
     parser.add_argument("--label_smoothing", type=float, default=0, help="Label smoothing for loss computation")
+
+    # NF
+    parser.add_argument("--nf_head", action="store_true", default=False)
+    parser.add_argument("--nf_lr_mult", type=float, default=1, help="LR multiplier for flow head optimizer")
+    parser.add_argument("--nf_clip_grad", default=-1, type=float, help="If > 0 used as clip grad value (for NF head)")
 
     # run params 
     parser.add_argument("--seed", type=int, default=42, help="Random seed for data splitting")
@@ -80,17 +84,22 @@ def get_args():
     parser.add_argument("--only_eval", action='store_true', default=False,
                         help="If you want only to evaluate a checkpoint")
     parser.add_argument("--checkpoint_path", type=str, default="", help="Path to pretrained checkpoint")
+    parser.add_argument("--wise_ft_alpha", type=float, default=1.0, help="Alpha value for WiSE-FT interpolation")
 
     # output_folder for checkpoints
     parser.add_argument("--save_ckpt", action='store_true', default=False, help="Should save the training output checkpoint to --output_dir?")
     parser.add_argument("--output_dir", type=str, default="", help="Location for output checkpoints")
     parser.add_argument("--debug", action='store_true', default=False, help="Run in debug mode, disable file logger")
+    parser.add_argument("--print_args", action='store_true', default=False, help="Print args to stdout")
 
     # save run on wandb 
     parser.add_argument("--wandb", action='store_true', default=False, help="Save this run on wandb")
 
     # performance options 
     parser.add_argument("--on_disk", action='store_true', default=False, help="Save/Recover extracted features on the disk. To be used for really large ID datasets (e.g. ImageNet)")
+    
+    # run name
+    parser.add_argument("--suffix", type=str, default="", help="Additional suffix for the run name")
 
     args = parser.parse_args()
     args.path_dataset = os.path.expanduser(args.path_dataset)
@@ -164,6 +173,7 @@ class Trainer:
                 from models.common import WrapperWithFC
                 self.output_num = 512
                 self.model = WrapperWithFC(model.visual, self.output_num, self.n_known_classes, half_precision=True)
+
             else:
                 raise NotImplementedError(f"Model {self.args.model} is not supported with network {self.args.network}")
 
@@ -174,17 +184,24 @@ class Trainer:
                 self.output_num = 768
 
                 if self.args.model == "DINO":
+                    if not self.args.checkpoint_path:
+                        raise AssertionError("Specify ckpt for DINO")
+
                     # we set num_classes to 0 in order to obtain pooled feats
                     model = timm.create_model("deit_base_patch16_224", pretrained=True, num_classes=0)
 
-                    # if we didn't need the contrastive head we could use the model from huggingface:
-                    # https://huggingface.co/facebook/dino-vitb16
-                    self.contrastive_enabled = not args.disable_contrastive_head
-                    from models.common import WrapperWithContrastiveHead
-                    self.model = WrapperWithContrastiveHead(model, out_dim=self.output_num, contrastive_type="DINO", 
-                                                            add_cls_head=True, n_classes=self.n_known_classes)
-                    if not args.disable_contrastive_head:
-                        self.output_num = self.model.contrastive_out_dim
+                    if self.args.nf_head:
+                        from models.common import WrapperWithNF
+                        self.model = WrapperWithNF(model, self.output_num, self.n_known_classes)
+                    else:
+                        # if we didn't need the contrastive head we could use the model from huggingface:
+                        # https://huggingface.co/facebook/dino-vitb16
+                        self.contrastive_enabled = not args.disable_contrastive_head
+                        from models.common import WrapperWithContrastiveHead
+                        self.model = WrapperWithContrastiveHead(model, out_dim=self.output_num, contrastive_type="DINO", 
+                                                                add_cls_head=True, n_classes=self.n_known_classes)
+                        if not args.disable_contrastive_head:
+                            self.output_num = self.model.contrastive_out_dim
 
                 else:
                     import types 
@@ -202,7 +219,12 @@ class Trainer:
                         return logits, feats
 
                     model.forward = types.MethodType(my_forward, model)
-                    self.model = model 
+
+                    if self.args.nf_head:
+                        from models.common import WrapperWithNF
+                        self.model = WrapperWithNF(model, self.output_num, add_cls_head=False)
+                    else:
+                        self.model = model 
 
             elif self.args.model == "clip":
                 # ViT-B/16
@@ -216,10 +238,11 @@ class Trainer:
                 self.model = WrapperWithFC(model.visual, self.output_num, self.n_known_classes, half_precision=True)
 
             elif self.args.model == "DINOv2":
+                from models.common import WrapperWithFC, WrapperWithNF
+                wrapper = WrapperWithNF if self.args.nf_head else WrapperWithFC
                 dinov2_vitb14 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14')
-                from models.common import WrapperWithFC
                 self.output_num = 1024
-                self.model = WrapperWithFC(dinov2_vitb14, self.output_num, self.n_known_classes)
+                self.model = wrapper(dinov2_vitb14, self.output_num, self.n_known_classes)
 
             elif self.args.model == "CE-IM22k" or self.args.model == "CE-IM21k":
                 # https://huggingface.co/google/vit-large-patch16-224-in21k
@@ -236,12 +259,12 @@ class Trainer:
 
             # we set num_classes to 0 in order to obtain pooled feats
             import timm 
-            from models.common import WrapperWithFC
+            from models.common import WrapperWithFC, WrapperWithNF
+            wrapper = WrapperWithNF if self.args.nf_head else WrapperWithFC
             # https://huggingface.co/timm/resnetv2_101x3_bit.goog_in21k
             model = timm.create_model('resnetv2_101x3_bit.goog_in21k', pretrained=True, num_classes=0)
             self.output_num = 6144
-
-            self.model = WrapperWithFC(model, self.output_num, self.n_known_classes)
+            self.model = wrapper(model, self.output_num, self.n_known_classes)
 
         elif self.args.network == "resend":
             assert self.args.only_eval and ckpt is not None, "Cannot perform eval without a pretrained model"
@@ -253,17 +276,23 @@ class Trainer:
         else:
             raise NotImplementedError(f"Network {self.args.network} not implemented")
 
-        if ckpt is not None: 
+        if ckpt is not None:
             print(f"Loading checkpoint {self.args.checkpoint_path}")
-            missing, unexpected = self.model.load_state_dict(clean_ckpt(ckpt, self.model), strict=False)
-            print(f"Missing keys: {missing}, unexpected keys: {unexpected}")
+            if self.args.wise_ft_alpha < 1:
+                print(f"Interpolating weights with alpha={self.args.wise_ft_alpha}")
+                self.to_device(self.device)
+                self.model.load_state_dict(interpolate_ckpts(self.model.state_dict(), ckpt, self.args.wise_ft_alpha))
+            else:
+                missing, unexpected = self.model.load_state_dict(clean_ckpt(ckpt, self.model), strict=False)
+                print(f"Missing keys: {missing}, unexpected keys: {unexpected}")
 
         self.to_device(self.device)
         self.args.output_num = self.output_num
         self.args.n_known_classes = self.n_known_classes
 
+        self.raw_model = self.model # maintain access to the "raw" internal module in case of DDP
         if self.args.distributed:
-            self.model = DDP(self.model, find_unused_parameters=True)
+            self.model = DDP(self.raw_model, find_unused_parameters=True)
 
         print("Number of parameters: ", count_parameters(self.model))
 
@@ -356,6 +385,10 @@ class Trainer:
             metrics = ASH_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
 
+        elif self.args.evaluator == "flow":
+            metrics = flow_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader, device=self.device,
+                                            model=self.model)
+
         else:
             raise NotImplementedError(f"Unknown evaluator {self.args.evaluator}")
 
@@ -372,39 +405,71 @@ class Trainer:
 
         print(f"Auroc,FPR95: {auroc:.4f},{fpr_auroc:.4f}")
 
-    def save_ckpt(self, iteration, optimizer=None, scheduler=None):
+    def save_ckpt(self, aux_modules=None, iteration=None):
         if self.args.save_ckpt and (not self.args.distributed or self.args.global_rank == 0):
-            save_model = self.model.module if self.args.distributed else self.model
             ckpt_path = join(self.args.output_dir, "model_last.pth")
-            torch.save(save_model.state_dict(), ckpt_path)
+            torch.save(self.raw_model.state_dict(), ckpt_path)
             print(f"Saved model to {ckpt_path}")
 
-            if optimizer is not None: 
-                aux_data = {}
-                aux_data['optimizer'] = optimizer.state_dict()
-                aux_data['scheduler'] = scheduler.state_dict()
-                aux_data['last_iter'] = iteration
+            if aux_modules:
+                assert iteration is not None, "Specify iteration when saving additional modules"
+                aux_data = {module_name: module.state_dict() for module_name, module in aux_modules.items()}
+                aux_data["last_iter"] = iteration
                 aux_data_path = join(self.args.output_dir, "aux_data_last.pth")
                 torch.save(aux_data, aux_data_path)
 
-    def resume(self, optimizer, scheduler):
+    def resume(self, aux_modules):
         ckpt_path = join(self.args.output_dir, "model_last.pth")
         aux_data_path = join(self.args.output_dir, "aux_data_last.pth")
         if not (os.path.isfile(ckpt_path) and os.path.isfile(aux_data_path)):
-            return False, None, None, None
+            return False, None
 
         ckpt_state_dict = torch.load(ckpt_path, map_location=self.device)
-        if self.args.distributed:
-            self.model.module.load_state_dict(ckpt_state_dict, strict=True)
-        else:
-            self.model.load_state_dict(ckpt_state_dict, strict=True)
+        self.raw_model.load_state_dict(ckpt_state_dict, strict=True)
         del ckpt_state_dict
 
         aux_data = torch.load(aux_data_path, map_location=self.device)
-        optimizer.load_state_dict(aux_data["optimizer"])
-        scheduler.load_state_dict(aux_data["scheduler"])
-        last_iter = aux_data['last_iter']
-        return True, optimizer, scheduler, last_iter
+        for module_name, module in aux_modules.items():
+            module.load_state_dict(aux_data[module_name])
+        last_iter = aux_data["last_iter"]
+        return True, last_iter
+
+    def get_train_log_fn(self, loss_divider):
+        def get_suffixes(name):
+            return (f"({name}) ", f"_{name}") if name else ("", "")
+
+        def do_logging(it, optims_dict, losses_dict, train_acc):
+            wandb_data = {}
+            log_msg = [f"Iterations: {it+1:6d}/{self.args.iterations}"]
+            # LR
+            msg = ""
+            for name, optim_ in optims_dict.items():
+                if msg: msg += ", "
+                current_lr = optim_.param_groups[0]["lr"]
+                log_suffix, wandb_suffix = get_suffixes(name)
+                msg += f"{current_lr:.6f}{log_suffix}"
+                wandb_data[f"lr{wandb_suffix}"] = current_lr
+            log_msg.append(f"LR: {msg}")
+            # Loss
+            msg = ""
+            for name, loss_ in losses_dict.items():
+                if msg: msg += ", "
+                avg_loss = loss_ / loss_divider
+                log_suffix, wandb_suffix = get_suffixes(name)
+                msg += f"{avg_loss:6.4f}{log_suffix}"
+                wandb_data[f"loss{wandb_suffix}"] = avg_loss
+            log_msg.append(f"Loss: {msg}")
+            # Acc
+            log_msg.append(f"Acc: {train_acc:6.4f}")
+            wandb_data["acc"] = train_acc
+
+            print(*log_msg, sep="\t")
+            
+            if self.args.wandb and is_main_process(self.args):
+                wandb.log(wandb_data, step=it)
+
+        return do_logging
+
 
     def do_train(self):
         # prepare data 
@@ -428,27 +493,37 @@ class Trainer:
             self.args.learning_rate *= self.args.n_gpus
         self.to_train()
 
-        # prepare optimizer 
-        optim_params = self.model.parameters()
+        # prepare optimizer
         if self.args.freeze_backbone:
-            if hasattr(self.model, "fc"):
-                optim_params = self.model.fc.parameters()
-            elif hasattr(self.model, "base_model") and hasattr(self.model.base_model, "fc"):
-                optim_params = self.model.base_model.fc.parameters()
+            if hasattr(self.raw_model, "fc"):
+                optim_params = self.raw_model.fc.parameters()
+            elif hasattr(self.raw_model, "base_model") and hasattr(self.raw_model.base_model, "fc"):
+                optim_params = self.raw_model.base_model.fc.parameters()
             else:
                 raise NotImplementedError("Don't know how to access fc")
+        elif self.args.nf_head:
+            optim_params = self.raw_model.cls_parameters()
+        else:
+            optim_params = self.model.parameters()
 
-        optimizer = optim.SGD(optim_params, weight_decay=.0005, momentum=.9, lr=self.args.learning_rate)
-        scheduler = LinearWarmupCosineAnnealingLR(optimizer, warmup_epochs=self.args.warmup_iters, max_epochs=self.args.iterations)
+        def get_optim_sched(params, lr):
+            optim_ = optim.Adam(params, lr=lr, weight_decay=1e-5)
+            sched_ = LinearWarmupCosineAnnealingLR(optim_, warmup_epochs=self.args.warmup_iters, max_epochs=self.args.iterations)
+            return optim_, sched_
+
+        optimizer, scheduler = get_optim_sched(optim_params, self.args.learning_rate)
+        if self.args.nf_head:
+            optimizer_nf, scheduler_nf = get_optim_sched(self.raw_model.nf.parameters(), self.args.learning_rate * self.args.nf_lr_mult)
 
         if self.args.resume:
-            resume_possible, resumed_optim, resumed_sched, resume_it = self.resume(optimizer, scheduler)
+            aux_modules = get_aux_modules_dict(optimizer, scheduler)
+            if self.args.nf_head:
+                aux_modules.update(get_aux_modules_dict(optimizer_nf, scheduler_nf, suffix="nf"))
+            resume_possible, resume_it = self.resume(aux_modules)
             if not resume_possible:
                 print("Cannot resume, ckpt does not exist or is not complete")
                 start_it = 0
             else:
-                optimizer = resumed_optim
-                scheduler = resumed_sched
                 start_it = resume_it + 1
                 print(f"Training resumed from it {start_it}")
         else:
@@ -460,8 +535,14 @@ class Trainer:
         train_iter = iter(train_loader)
         log_period = 10
         ckpt_period = 500
-        avg_loss = 0
+        running_loss = 0
+        if self.args.nf_head:
+            running_loss_nf = 0
+
+        train_log_fn = self.get_train_log_fn(log_period)
+
         print(f"Start training, lr={self.args.learning_rate}, start_iter={start_it}, iterations={self.args.iterations}, warmup_iters={self.args.warmup_iters}")
+
         for it in range(start_it, self.args.iterations):
 
             try: 
@@ -473,37 +554,51 @@ class Trainer:
             images, labels = batch 
             images = images.to(self.device)
             labels = labels.to(self.device)
-            outputs, feats = self.model(images)
 
+            outputs, _ = self.model(images)
             loss = loss_fn(outputs, labels)
-
             optimizer.zero_grad()
             loss.backward()
             if self.args.clip_grad > 0:
-                torch.nn.utils.clip_grad_value_(self.model.parameters(), self.args.clip_grad)
+                params = self.raw_model.cls_parameters() if self.args.nf_head else self.model.parameters()
+                nn.utils.clip_grad_value_(params, self.args.clip_grad)
             optimizer.step()
             scheduler.step()
+            running_loss += loss.item()
+            # flow
+            if self.args.nf_head:
+                ll, _ = self.model(images, classify=False, flow=True, backbone_grad=False)
+                loss_nf = -torch.mean(ll) / self.output_num
+                optimizer_nf.zero_grad()
+                loss_nf.backward()
+                if self.args.nf_clip_grad > 0:
+                    nn.utils.clip_grad_value_(self.raw_model.nf.parameters(), self.args.nf_clip_grad)
+                optimizer_nf.step()
+                scheduler_nf.step()
+                running_loss_nf += loss_nf.item()
 
-            avg_loss += loss.item()
             if (it+1) % log_period == 0:
-                _,preds = outputs.max(dim=1)
+                _, preds = outputs.max(dim=1)
                 train_acc = ((preds == labels).sum()/len(preds)).cpu().item()
-                current_lr = optimizer.param_groups[0]['lr']
-                print(f"Iterations: {it+1:6d}/{self.args.iterations}\t LR: {current_lr:.6f}\t Loss: {avg_loss / log_period:6.4f} \t Acc: {train_acc:6.4f}")
-                if self.args.wandb and is_main_process(self.args):
-
-                    wandb.log({"lr": current_lr, "loss": avg_loss/log_period, "acc": train_acc}, step=it)
-
-                avg_loss = 0
+                optims_dict = {"": optimizer}
+                losses_dict = {"": running_loss}
+                if self.args.nf_head:
+                    optims_dict["nf"] = optimizer_nf
+                    losses_dict["nf"] = running_loss_nf
+                train_log_fn(it, optims_dict, losses_dict, train_acc)
+                running_loss = 0
+                if self.args.nf_head:
+                    running_loss_nf = 0
 
             if (it+1) % ckpt_period == 0:
-                self.save_ckpt(it, optimizer, scheduler)
+                aux_modules = get_aux_modules_dict(optimizer, scheduler)
+                if self.args.nf_head:
+                    aux_modules.update(get_aux_modules_dict(optimizer_nf, scheduler_nf, suffix="nf"))
+                self.save_ckpt(aux_modules, it)
 
         # save final checkpoint 
-        if self.args.save_ckpt and (not self.args.distributed or self.args.global_rank == 0):
-            self.save_ckpt(self.args.iterations)
+        self.save_ckpt()
 
-        optimizer.zero_grad()
 
 @record
 def main():
@@ -559,11 +654,16 @@ def main():
         run_name=f"{args.network}_{args.model}_{args.evaluator}_{args.dataset}_{args.support}_{args.test}"
         if not args.data_order == -1:
             run_name += f"_{args.data_order}"
+        if args.suffix:
+            run_name += f"_{args.suffix}"
 
         wandb.init(
                 project="OODDetectionFramework",
                 config=vars(args),
                 name=run_name)
+    
+    if args.print_args:
+        print(args)
 
     print("###############################################################################")
     print("######################### OOD Detection Benchmark #############################")
