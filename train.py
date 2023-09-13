@@ -278,13 +278,14 @@ class Trainer:
 
         if ckpt is not None:
             print(f"Loading checkpoint {self.args.checkpoint_path}")
-            if self.args.wise_ft_alpha < 1:
+            assert self.args.wise_ft_alpha >= 0 and self.args.wise_ft_alpha <= 1, "wise_ft_alpha must be a value betweeen 0 and 1"
+            if self.args.wise_ft_alpha == 1:
+                missing, unexpected = self.model.load_state_dict(clean_ckpt(ckpt, self.model), strict=False)
+                print(f"Missing keys: {missing}, unexpected keys: {unexpected}")
+            else:
                 print(f"Interpolating weights with alpha={self.args.wise_ft_alpha}")
                 self.to_device(self.device)
                 self.model.load_state_dict(interpolate_ckpts(self.model.state_dict(), ckpt, self.args.wise_ft_alpha))
-            else:
-                missing, unexpected = self.model.load_state_dict(clean_ckpt(ckpt, self.model), strict=False)
-                print(f"Missing keys: {missing}, unexpected keys: {unexpected}")
 
         self.to_device(self.device)
         self.args.output_num = self.output_num
