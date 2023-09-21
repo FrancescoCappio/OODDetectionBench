@@ -2,6 +2,7 @@ import torch
 import faiss
 import numpy as np
 from tqdm import tqdm
+from sklearn.cluster import KMeans
 
 from models.evaluators.common import prepare_ood_labels, calc_ood_metrics, run_model, closed_set_accuracy
 from models.common import normalize_feats
@@ -48,6 +49,25 @@ def compute_prototypes(train_feats, train_lbls, normalize=False):
 
     return prototypes
 
+def compute_centroids(train_feats, train_lbls, K):
+    print(f"Computing {K} centroids")
+    classes = np.unique(train_lbls)
+    centers = []
+    centers_lbls = []
+    for cl in tqdm(classes):
+        feats = train_feats[train_lbls == cl]
+        n_samples = feats.shape[0]
+        if K > n_samples:
+            print(f"WARNING: the number of centroids ({K}) is greater than the one of samples ({n_samples})")
+            centers.append(feats)
+            centers_lbls.extend([cl] * n_samples)
+        else:
+            centers.append(KMeans(K, n_init="auto").fit(feats).cluster_centers_)
+            centers_lbls.extend([cl] * K)
+    centers = np.concatenate(centers, axis=0)
+    centers_lbls = np.array(centers_lbls)
+    return centers, centers_lbls
+
 @torch.no_grad()
 def prototypes_distance_evaluator(args, train_loader, test_loader, device, model, contrastive_head=False, cosine_sim=False): 
     # first we extract features for both source and target data
@@ -77,7 +97,7 @@ def prototypes_distance_evaluator(args, train_loader, test_loader, device, model
     return metrics 
 
 @torch.no_grad()
-def knn_distance_evaluator(args, train_loader, test_loader, device, model, contrastive_head=False, K=50, normalize=False, cosine_sim=False): 
+def knn_distance_evaluator(args, train_loader, test_loader, device, model, contrastive_head=False, K=50, k_means=-1, normalize=False, cosine_sim=False): 
     # implements ICML 2022: https://proceedings.mlr.press/v162/sun22d.html
     # first we extract features for both source and target data
     print(f"Running KNN distance evaluator with K={K}")
@@ -92,6 +112,8 @@ def knn_distance_evaluator(args, train_loader, test_loader, device, model, contr
         train_feats = normalize_feats(train_feats)
         test_feats = normalize_feats(test_feats)
 
+    if k_means > 0:
+        train_feats, train_lbls = compute_centroids(train_feats, train_lbls, K=k_means)
 
     if cosine_sim: 
         # returns neighbours with decreasing similarity (nearest to farthest) 
@@ -123,9 +145,9 @@ def knn_distance_evaluator(args, train_loader, test_loader, device, model, contr
     return metrics 
 
 @torch.no_grad()
-def knn_ood_evaluator(args, train_loader, test_loader, device, model, contrastive_head=False, K=50): 
+def knn_ood_evaluator(args, train_loader, test_loader, device, model, contrastive_head=False, K=50, k_means=-1): 
     # implements ICML 2022: https://proceedings.mlr.press/v162/sun22d.html
     # similar to standard knn evaluator, but apply normalize before L2 distance
 
-    return knn_distance_evaluator(args, train_loader, test_loader, device, model, contrastive_head=contrastive_head, K=K, normalize=True)
+    return knn_distance_evaluator(args, train_loader, test_loader, device, model, contrastive_head=contrastive_head, K=K, k_means=k_means, normalize=True)
 

@@ -51,6 +51,7 @@ def get_args():
 
     # evaluators-specific parameters 
     parser.add_argument("--NNK", help="K value to use for Knn distance evaluator", type=int, default=1)
+    parser.add_argument("--k_means", type=int, default=-1, help="Number of centroids for Knn distance evaluator (if any)")
     parser.add_argument("--disable_contrastive_head", action='store_true', default=False, help="Do not use contrastive head for distance-based evaluators")
     parser.add_argument("--disable_R2", action='store_true', default=False, help="Disable R2 computation for a slight speed up in evals")
 
@@ -354,12 +355,13 @@ class Trainer:
 
         elif self.args.evaluator == "knn_ood":
             metrics = knn_ood_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
-                                        device=self.device, model=self.model, contrastive_head=self.contrastive_enabled, K=self.args.NNK)
+                                        device=self.device, model=self.model, contrastive_head=self.contrastive_enabled, K=self.args.NNK,
+                                        k_means=self.args.k_means)
 
         elif self.args.evaluator == "knn_distance":
             metrics = knn_distance_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                             device=self.device, model=self.model, contrastive_head=self.contrastive_enabled, K=self.args.NNK,
-                                            cosine_sim=cosine_similarity)
+                                            k_means=self.args.k_means, cosine_sim=cosine_similarity)
 
         elif self.args.evaluator == "linear_probe":
             metrics = linear_probe_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
