@@ -5,7 +5,7 @@ from tqdm import tqdm
 
 from models.evaluators.common import prepare_ood_labels, calc_ood_metrics, run_model, closed_set_accuracy
 from models.common import normalize_feats
-from utils.utils import compute_R2
+from utils.utils import compute_R2, plot_tsne
 
 def get_euclidean_normality_scores(test_features, prototypes):
     # normality scores computed as the opposite of the euclidean distance w.r.t. the nearest prototype
@@ -76,6 +76,26 @@ def prototypes_distance_evaluator(args, train_loader, test_loader, device, model
 
     return metrics 
 
+def ratio_NN_unknown(D, test_feats, ood_lbls, cosine_sim=False):
+
+    if cosine_sim:
+        test_index = faiss.IndexFlatIP(test_feats.shape[1])
+    else:
+        test_index = faiss.IndexFlatL2(test_feats.shape[1])
+
+    test_index.add(test_feats)
+    D_test, test_NN_ids = test_index.search(test_feats, 2)
+    test_NN_ids = test_NN_ids[:,1]
+    D_test = D_test[:,1]
+    cat_Ds = np.concatenate((D, np.expand_dims(D_test, 1)), axis=1)
+    if cosine_sim:
+        min_dist_support_test = cat_Ds.argmax(1)
+    else:
+        min_dist_support_test = cat_Ds.argmin(1)
+    num_unk = np.sum(np.logical_and((ood_lbls == 0), (min_dist_support_test==1)))
+    ratio = num_unk/len(test_feats)
+    return ratio
+
 @torch.no_grad()
 def knn_distance_evaluator(args, train_loader, test_loader, device, model, contrastive_head=False, K=50, normalize=False, cosine_sim=False): 
     # implements ICML 2022: https://proceedings.mlr.press/v162/sun22d.html
@@ -92,6 +112,8 @@ def knn_distance_evaluator(args, train_loader, test_loader, device, model, contr
         train_feats = normalize_feats(train_feats)
         test_feats = normalize_feats(test_feats)
 
+    if args.enable_TSNE:
+        plot_tsne(args, support_feats=train_feats, support_lbls=train_lbls, test_feats=test_feats, test_lbls=test_lbls)
 
     if cosine_sim: 
         # returns neighbours with decreasing similarity (nearest to farthest) 
@@ -105,10 +127,14 @@ def knn_distance_evaluator(args, train_loader, test_loader, device, model, contr
     train_NN_lbls = train_lbls[train_NN_ids]
     test_predictions = np.array([np.bincount(pred_NN_lbls).argmax() for pred_NN_lbls in train_NN_lbls])
 
+    if args.enable_ratio_NN_unknown:
+        ratio = ratio_NN_unknown(D, test_feats, ood_labels, cosine_sim)
+
     test_normality_scores = D[:,-1]
     if not cosine_sim:
         # (inverted) distance from Kth nearest neighbour is the normality score 
         test_normality_scores *= -1
+
 
     print(f"Num known: {ood_labels.sum()}. Num unknown: {len(test_lbls) - ood_labels.sum()}.")
 
@@ -119,6 +145,9 @@ def knn_distance_evaluator(args, train_loader, test_loader, device, model, contr
     if not args.disable_R2:
         r2_metric = compute_R2(train_feats, train_lbls, metric='cosine_distance' if normalize else 'euclidean_distance')
         metrics["support_R2"] = r2_metric
+
+    if args.enable_ratio_NN_unknown:
+        metrics["ratio_NN_unknown"] = ratio
 
     return metrics 
 

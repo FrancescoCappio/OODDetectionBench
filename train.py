@@ -53,6 +53,8 @@ def get_args():
     parser.add_argument("--NNK", help="K value to use for Knn distance evaluator", type=int, default=1)
     parser.add_argument("--disable_contrastive_head", action='store_true', default=False, help="Do not use contrastive head for distance-based evaluators")
     parser.add_argument("--disable_R2", action='store_true', default=False, help="Disable R2 computation for a slight speed up in evals")
+    parser.add_argument("--enable_TSNE", action='store_true', default=False, help="Plot and save t-SNE representations of extracted features")
+    parser.add_argument("--enable_ratio_NN_unknown", action='store_true', default=False, help="Compute ratio of test OOD samples whose NN is another OOD sample")
 
     # data params
     parser.add_argument("--image_size", type=int, default=224, help="Image size")
@@ -397,6 +399,8 @@ class Trainer:
             print(f"Closed set accuracy: {metrics['cs_acc']:.4f}")
         if "support_R2" in metrics:
             print(f"Support set R2 score: {metrics['support_R2']:.4f}")
+        if "ratio_NN_unknown" in metrics:
+            print(f"Ratio NN unknown: {metrics['ratio_NN_unknown']:.4f}")
 
         auroc = metrics["auroc"]
         fpr_auroc = metrics["fpr_at_95_tpr"]
