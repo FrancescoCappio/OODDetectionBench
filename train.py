@@ -279,9 +279,9 @@ class Trainer:
         else:
             raise NotImplementedError(f"Network {self.args.network} not implemented")
 
-        if ckpt is not None:
+        if ckpt is not None and self.args.wise_ft_alpha > 0:
             print(f"Loading checkpoint {self.args.checkpoint_path}")
-            assert self.args.wise_ft_alpha >= 0 and self.args.wise_ft_alpha <= 1, "wise_ft_alpha must be a value betweeen 0 and 1"
+            assert self.args.wise_ft_alpha <= 1, "wise_ft_alpha must be a value betweeen 0 and 1"
             if self.args.wise_ft_alpha == 1:
                 missing, unexpected = self.model.load_state_dict(clean_ckpt(ckpt, self.model), strict=False)
                 print(f"Missing keys: {missing}, unexpected keys: {unexpected}")
