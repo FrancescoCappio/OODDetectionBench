@@ -120,6 +120,9 @@ def get_base_job_name(args):
     
     base_name += f"_{args.evaluator}"
 
+    if args.suffix:
+        base_name += f"_{args.suffix}"
+
     return base_name
 
 
