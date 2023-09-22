@@ -2,7 +2,6 @@ import torch
 import faiss
 import numpy as np
 from tqdm import tqdm
-from sklearn.cluster import KMeans
 
 from models.evaluators.common import prepare_ood_labels, calc_ood_metrics, run_model, closed_set_accuracy
 from models.common import normalize_feats
@@ -49,24 +48,26 @@ def compute_prototypes(train_feats, train_lbls, normalize=False):
 
     return prototypes
 
-def compute_centroids(train_feats, train_lbls, K):
-    print(f"Computing {K} centroids")
+def compute_centroids(train_feats, train_lbls, n_clusters):
+    from sklearn.cluster import KMeans
+    print(f"Computing {n_clusters} centroids")
     classes = np.unique(train_lbls)
-    centers = []
-    centers_lbls = []
+    centroids = []
+    centroids_lbls = []
     for cl in tqdm(classes):
         feats = train_feats[train_lbls == cl]
         n_samples = feats.shape[0]
-        if K > n_samples:
-            print(f"WARNING: the number of centroids ({K}) is greater than the one of samples ({n_samples})")
-            centers.append(feats)
-            centers_lbls.extend([cl] * n_samples)
+        if n_clusters < n_samples:
+            cl_centroids = KMeans(n_clusters, n_init="auto").fit(feats).cluster_centers_
+            centroids.append(cl_centroids)
+            centroids_lbls.append(np.full(n_clusters, cl))
         else:
-            centers.append(KMeans(K, n_init="auto").fit(feats).cluster_centers_)
-            centers_lbls.extend([cl] * K)
-    centers = np.concatenate(centers, axis=0)
-    centers_lbls = np.array(centers_lbls)
-    return centers, centers_lbls
+            print(f"WARNING: the number of centroids ({n_clusters}) is greater or equal than the one of samples ({n_samples})")
+            centroids.append(feats)
+            centroids_lbls.append(np.full(n_samples, cl))
+    centroids = np.concatenate(centroids, axis=0)
+    centroids_lbls = np.concatenate(centroids_lbls, axis=0)
+    return centroids, centroids_lbls
 
 @torch.no_grad()
 def prototypes_distance_evaluator(args, train_loader, test_loader, device, model, contrastive_head=False, cosine_sim=False): 
@@ -113,7 +114,7 @@ def knn_distance_evaluator(args, train_loader, test_loader, device, model, contr
         test_feats = normalize_feats(test_feats)
 
     if k_means > 0:
-        train_feats, train_lbls = compute_centroids(train_feats, train_lbls, K=k_means)
+        train_feats, train_lbls = compute_centroids(train_feats, train_lbls, n_clusters=k_means)
 
     if cosine_sim: 
         # returns neighbours with decreasing similarity (nearest to farthest) 
