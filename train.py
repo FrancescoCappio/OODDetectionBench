@@ -401,6 +401,8 @@ class Trainer:
             print(f"Closed set accuracy: {metrics['cs_acc']:.4f}")
         if "support_R2" in metrics:
             print(f"Support set R2 score: {metrics['support_R2']:.4f}")
+        if "id_ood_R2" in metrics:
+            print(f"Avg id-ood R2 score: {metrics['id_ood_R2']:.4f}")
         if "ratio_NN_unknown" in metrics:
             print(f"Ratio NN unknown: {metrics['ratio_NN_unknown']:.4f}")
 
