@@ -134,10 +134,13 @@ def knn_distance_evaluator(args, train_loader, test_loader, device, model, contr
         test_feats = normalize_feats(test_feats)
 
     if k_means > 0:
-        train_feats, train_lbls = compute_centroids(train_feats, train_lbls, n_clusters=k_means)
+        index_feats, index_lbls = centroids, centroids_lbls = compute_centroids(train_feats, train_lbls, n_clusters=k_means)
+    else:
+        centroids = centroids_lbls = None
+        index_feats, index_lbls = train_feats, train_lbls
 
     if args.enable_TSNE:
-        plot_tsne(args, support_feats=train_feats, support_lbls=train_lbls, test_feats=test_feats, test_lbls=test_lbls)
+        plot_tsne(args, support_feats=train_feats, support_lbls=train_lbls, test_feats=test_feats, test_lbls=test_lbls, centroids=centroids, centroids_lbls=centroids_lbls)
 
     if cosine_sim: 
         # returns neighbours with decreasing similarity (nearest to farthest) 
@@ -146,9 +149,9 @@ def knn_distance_evaluator(args, train_loader, test_loader, device, model, contr
         # returns neighbours with increasing distance (nearest to farthest) 
         index = faiss.IndexFlatL2(train_feats.shape[1])
 
-    index.add(train_feats)
+    index.add(index_feats)
     D, train_NN_ids = index.search(test_feats, K)
-    train_NN_lbls = train_lbls[train_NN_ids]
+    train_NN_lbls = index_lbls[train_NN_ids]
     test_predictions = np.array([np.bincount(pred_NN_lbls).argmax() for pred_NN_lbls in train_NN_lbls])
 
     if args.enable_ratio_NN_unknown:

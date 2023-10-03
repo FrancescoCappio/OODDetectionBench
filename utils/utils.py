@@ -174,7 +174,7 @@ def compute_R2(feats, labels, metric="cosine_distance", return_stats=False):
     
     return res
 
-def plot_tsne(args, support_feats, support_lbls, test_feats, test_lbls):
+def plot_tsne(args, support_feats, support_lbls, test_feats, test_lbls, centroids=None, centroids_lbls=None):
     from sklearn.manifold import TSNE
     import matplotlib.pyplot as plt
     import matplotlib as mpl
@@ -190,6 +190,10 @@ def plot_tsne(args, support_feats, support_lbls, test_feats, test_lbls):
     output_dir = os.path.join("t-SNE_plots", job_name)
     os.makedirs(output_dir, exist_ok=True)
 
+    if centroids is not None or centroids_lbls is not None:
+        assert centroids is not None and centroids_lbls is not None
+        support_feats = np.concatenate((centroids, support_feats), axis=0)
+
     all_feats = np.concatenate((support_feats, test_feats), axis=0)
 
     feats_embedded = TSNE(n_components=2, init='pca', learning_rate='auto').fit_transform(all_feats)
@@ -199,32 +203,43 @@ def plot_tsne(args, support_feats, support_lbls, test_feats, test_lbls):
 
     ood_labels = prepare_ood_labels(ID_label_set, test_lbls)
 
-    support_feats_embedded = feats_embedded[:len(support_feats)]
+    if centroids is not None:
+        first_support_idx = len(centroids)
+        centroids_feats_embedded = feats_embedded[:first_support_idx]
+    else:
+        first_support_idx = 0
+    support_feats_embedded = feats_embedded[first_support_idx:len(support_feats)]
     test_feats_embedded = feats_embedded[len(support_feats):]
     known_test_feats_embedded = test_feats_embedded[ood_labels == 1]
     unknown_test_feats_embedded = test_feats_embedded[ood_labels == 0]
 
-    # first plot, only support set 
+    # first plot, only support set
     fig, ax = plt.subplots()
+    alpha = None if centroids is None else 0.2  # None is plt default value
     for ID_lbl in ID_label_set: 
         # train 
         mask = (support_lbls == ID_lbl)
         class_feats = support_feats_embedded[mask]
         color = ID_colors[ID_lbl]
-        
-        ax.scatter(class_feats[:,0], class_feats[:,1], c=np.expand_dims(color,axis=0), edgecolors='grey')
-
+        ax.scatter(class_feats[:,0], class_feats[:,1], c=np.expand_dims(color,axis=0), edgecolors='grey', alpha=alpha)
     fig.savefig(os.path.join(output_dir, "support_feats.png"))
+        
+    # plot centroids, if using k-means
+    if centroids is not None:
+        for ID_lbl in ID_label_set: 
+            mask = (centroids_lbls == ID_lbl)
+            class_feats = centroids_feats_embedded[mask]
+            color = ID_colors[ID_lbl]
+            ax.scatter(class_feats[:,0], class_feats[:,1], c=np.expand_dims(color,axis=0), edgecolors='grey', marker="^")
+        fig.savefig(os.path.join(output_dir, "support_feats_centroids.png"))
 
-    # add known test feats 
+    # add known test feats
     for ID_lbl in ID_label_set: 
         # train 
         mask = (test_lbls[ood_labels==1] == ID_lbl)
         class_feats = known_test_feats_embedded[mask]
         color = ID_colors[ID_lbl]
-        
         ax.scatter(class_feats[:,0], class_feats[:,1], c=np.expand_dims(color,axis=0), marker="*")
-    
     fig.savefig(os.path.join(output_dir, "support_test_known_feats.png"))
 
     # now add unknown feats
