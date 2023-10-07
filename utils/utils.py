@@ -86,7 +86,7 @@ def interpolate_ckpts(zeroshot_ckpt, finetuned_ckpt, alpha):
 
 
 @torch.no_grad()
-def compute_sets_distance(feats1, feats2, metric="cosine_distance"):
+def compute_sets_distance(feats1, feats2, metric="cosine_distance", mean=True):
     """Compute the average distance between pairs of samples coming from two sets"""
     feats1 = torch.from_numpy(feats1)
     feats2 = torch.from_numpy(feats2)
@@ -105,7 +105,10 @@ def compute_sets_distance(feats1, feats2, metric="cosine_distance"):
         raise NotImplementedError(f"Unknown distace metric {metric}")
 
     all_distances = set_distance_fn(feats1, feats2)
-    return all_distances.mean().numpy()
+    if mean:
+        all_distances = all_distances.mean()
+    return all_distances.numpy()
+
 
 def get_base_job_name(args):
     base_name = f"{args.network}_{args.model}"
@@ -173,6 +176,39 @@ def compute_R2(feats, labels, metric="cosine_distance", return_stats=False):
         return res, d_total, d_within
     
     return res
+
+
+def compute_ranking_index(feats, labels, metric="euclidean_distance"):
+    # compute pairwise distances
+    all_distances = compute_sets_distance(feats, feats, metric, mean=False)
+    np.fill_diagonal(all_distances, -1) # "mask" distance of samples with themselves -> this will result in rank 0
+    print(np.nonzero(all_distances[1612] == 0)[0])
+    print(np.sort(all_distances[1612])[:7])
+
+    n_samples = len(feats)
+    assert n_samples == len(labels) == all_distances.shape[0] == all_distances.shape[1]
+
+    # compute all ranks for each sample (i.e. for each row)
+    all_ranks = np.empty((n_samples, n_samples), dtype=int)
+    arange = np.arange(n_samples)
+    all_ranks[arange.reshape(-1, 1), all_distances.argsort(axis=1)] = arange
+
+    # ensure that for each sample the rank 0 corresponds to the sample itself
+    assert np.all(all_ranks.diagonal() == 0)
+
+    # consider only the samples from the same class
+    mask = (labels.reshape(-1, 1) == labels.reshape(1, -1))
+    np.fill_diagonal(mask, False) # mask samples from themselves
+
+    accum = 0
+    for ranks_i, mask_i in zip(all_ranks, mask):
+        sorted_ranks = np.sort(ranks_i[mask_i])
+        arange = np.arange(1, len(sorted_ranks) + 1)
+        accum += 1 - np.mean(arange / sorted_ranks)
+    
+    rank_index = 1 - accum / (n_samples - 1)
+    return rank_index
+
 
 def plot_tsne(args, support_feats, support_lbls, test_feats, test_lbls, centroids=None, centroids_lbls=None):
     from sklearn.manifold import TSNE

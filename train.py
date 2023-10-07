@@ -56,6 +56,7 @@ def get_args():
     parser.add_argument("--disable_R2", action='store_true', default=False, help="Disable R2 computation for a slight speed up in evals")
     parser.add_argument("--enable_TSNE", action='store_true', default=False, help="Plot and save t-SNE representations of extracted features")
     parser.add_argument("--enable_ratio_NN_unknown", action='store_true', default=False, help="Compute ratio of test OOD samples whose NN is another OOD sample")
+    parser.add_argument("--enable_ranking_index", action='store_true', default=False, help="Compute ranking index")
 
     # data params
     parser.add_argument("--image_size", type=int, default=224, help="Image size")
@@ -403,6 +404,8 @@ class Trainer:
             print(f"Support set R2 score: {metrics['support_R2']:.4f}")
         if "id_ood_R2" in metrics:
             print(f"Avg id-ood R2 score: {metrics['id_ood_R2']:.4f}")
+        if "ranking_index" in metrics:
+            print(f"Ranking index: {metrics['ranking_index']:.4f}")
         if "ratio_NN_unknown" in metrics:
             print(f"Ratio NN unknown: {metrics['ratio_NN_unknown']:.4f}")
 

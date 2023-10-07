@@ -5,7 +5,7 @@ from tqdm import tqdm
 
 from models.evaluators.common import prepare_ood_labels, calc_ood_metrics, run_model, closed_set_accuracy
 from models.common import normalize_feats
-from utils.utils import compute_R2, plot_tsne
+from utils.utils import compute_R2, compute_ranking_index, plot_tsne
 
 def get_euclidean_normality_scores(test_features, prototypes):
     # normality scores computed as the opposite of the euclidean distance w.r.t. the nearest prototype
@@ -183,6 +183,10 @@ def knn_distance_evaluator(args, train_loader, test_loader, device, model, contr
             lbls = np.concatenate((id_lbls, ood_lbls), axis=0)
             r2_per_class.append(compute_R2(feats, lbls, metric))
         metrics["id_ood_R2"] = sum(r2_per_class) / len(r2_per_class)
+    
+    if args.enable_ranking_index:
+        metric = "cosine_distance" if normalize else "euclidean_distance"
+        metrics["ranking_index"] = compute_ranking_index(train_feats, train_lbls, metric)
 
     if args.enable_ratio_NN_unknown:
         metrics["ratio_NN_unknown"] = ratio
