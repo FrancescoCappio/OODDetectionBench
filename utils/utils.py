@@ -182,8 +182,6 @@ def compute_ranking_index(feats, labels, metric="euclidean_distance"):
     # compute pairwise distances
     all_distances = compute_sets_distance(feats, feats, metric, mean=False)
     np.fill_diagonal(all_distances, -1) # "mask" distance of samples with themselves -> this will result in rank 0
-    print(np.nonzero(all_distances[1612] == 0)[0])
-    print(np.sort(all_distances[1612])[:7])
 
     n_samples = len(feats)
     assert n_samples == len(labels) == all_distances.shape[0] == all_distances.shape[1]
