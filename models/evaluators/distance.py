@@ -162,27 +162,17 @@ def knn_distance_evaluator(args, train_loader, test_loader, device, model, contr
         # (inverted) distance from Kth nearest neighbour is the normality score 
         test_normality_scores *= -1
 
-
     print(f"Num known: {ood_labels.sum()}. Num unknown: {len(test_lbls) - ood_labels.sum()}.")
 
     known_mask = ood_labels == 1
     cs_acc = closed_set_accuracy(test_predictions[known_mask], test_lbls[known_mask])
     metrics = calc_ood_metrics(test_normality_scores, ood_labels)
     metrics["cs_acc"] = cs_acc
+
     if not args.disable_R2:
         metric = "cosine_distance" if normalize else "euclidean_distance"
         r2_metric = compute_R2(train_feats, train_lbls, metric)
         metrics["support_R2"] = r2_metric
-        r2_per_class = []
-        for lbl in known_labels:
-            id_feats = np.concatenate((train_feats[train_lbls == lbl], test_feats[test_lbls == lbl]), axis=0)
-            id_lbls = np.ones(len(id_feats), dtype=int)
-            ood_feats = test_feats[ood_labels == 0]
-            ood_lbls = torch.zeros(len(ood_feats), dtype=int)
-            feats = np.concatenate((id_feats, ood_feats), axis=0)
-            lbls = np.concatenate((id_lbls, ood_lbls), axis=0)
-            r2_per_class.append(compute_R2(feats, lbls, metric))
-        metrics["id_ood_R2"] = sum(r2_per_class) / len(r2_per_class)
     
     if args.enable_ranking_index:
         metric = "cosine_distance" if normalize else "euclidean_distance"
@@ -191,7 +181,7 @@ def knn_distance_evaluator(args, train_loader, test_loader, device, model, contr
     if args.enable_ratio_NN_unknown:
         metrics["ratio_NN_unknown"] = ratio
 
-    return metrics 
+    return metrics
 
 @torch.no_grad()
 def knn_ood_evaluator(args, train_loader, test_loader, device, model, contrastive_head=False, K=50, k_means=-1): 
