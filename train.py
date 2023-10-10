@@ -47,7 +47,7 @@ def get_args():
                                                                     "resend", "DINOv2", "BiT", "CE-IM22k", "random_init", "CE-IM21k"])
     parser.add_argument("--evaluator", type=str, help="Strategy to compute normality scores", default="prototypes_distance",
                         choices=["prototypes_distance", "MSP", "MLS", "ODIN", "energy", "gradnorm", "mahalanobis", "gram", "knn_distance",
-                                 "linear_probe", "MCM", "knn_ood", "resend", "react", "flow", "EVM", "EVM_norm", "ASH"])
+                                 "linear_probe", "MCM", "knn_ood", "resend", "react", "flow", "EVM", "EVM_norm", "ASH", "wise_comparator"])
 
     # evaluators-specific parameters 
     parser.add_argument("--NNK", help="K value to use for Knn distance evaluator", type=int, default=1)
@@ -128,7 +128,8 @@ class Trainer:
         self.contrastive_enabled = False
         print(f"Model: {self.args.model}, Backbone: {self.args.network}")
 
-        ckpt = torch.load(self.args.checkpoint_path, map_location=device) if self.args.checkpoint_path else None
+        ckpt_device = device if args.evaluator != "wise_comparator" else "cpu"
+        ckpt = torch.load(self.args.checkpoint_path, map_location=ckpt_device) if self.args.checkpoint_path else None
 
         # setup the network and OOD model 
         if self.args.network == "resnet101":
@@ -288,8 +289,17 @@ class Trainer:
                 print(f"Missing keys: {missing}, unexpected keys: {unexpected}")
             else:
                 print(f"Interpolating weights with alpha={self.args.wise_ft_alpha}")
-                self.to_device(self.device)
-                self.model.load_state_dict(interpolate_ckpts(self.model.state_dict(), ckpt, self.args.wise_ft_alpha))
+                self.to_device(ckpt_device)
+                zeroshot_ckpt = self.model.state_dict()
+                wise_ckpt = interpolate_ckpts(zeroshot_ckpt, ckpt, self.args.wise_ft_alpha)
+                if self.args.evaluator != "wise_comparator":
+                    self.model.load_state_dict(wise_ckpt)
+                else:
+                    self.ckpts = {
+                        "zeroshot": (zeroshot_ckpt, ckpt_device),
+                        "wise": (wise_ckpt, ckpt_device),
+                        "ft": (ckpt, ckpt_device),
+                    }
 
         self.to_device(self.device)
         self.args.output_num = self.output_num
@@ -395,27 +405,33 @@ class Trainer:
             metrics = flow_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader, device=self.device,
                                             model=self.model)
 
+        elif self.args.evaluator == "wise_comparator":
+            metrics = wise_comparator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
+                                            device=self.device, model=self.model, ckpts=self.ckpts)
+
         else:
             raise NotImplementedError(f"Unknown evaluator {self.args.evaluator}")
 
-        if "cs_acc" in metrics:
-            print(f"Closed set accuracy: {metrics['cs_acc']:.4f}")
-        if "support_R2" in metrics:
-            print(f"Support set R2 score: {metrics['support_R2']:.4f}")
-        if "id_ood_R2" in metrics:
-            print(f"Avg id-ood R2 score: {metrics['id_ood_R2']:.4f}")
-        if "ranking_index" in metrics:
-            print(f"Ranking index: {metrics['ranking_index']:.4f}")
-        if "ratio_NN_unknown" in metrics:
-            print(f"Ratio NN unknown: {metrics['ratio_NN_unknown']:.4f}")
+        additional_metrics = [
+            ("cs_acc", "Closed set accuracy"),
+            ("support_R2", "Support set R2 score"),
+            ("ratio_NN_unknown", "Ratio NN unknown"),
+            ("ranking_index", "Ranking index"),
+        ]
+        for k, name in additional_metrics:
+            if k in metrics:
+                print(f"{name}: {metrics[k]:.4f}")
 
-        auroc = metrics["auroc"]
-        fpr_auroc = metrics["fpr_at_95_tpr"]
+        if self.args.evaluator != "wise_comparator":
+            auroc = metrics["auroc"]
+            fpr_auroc = metrics["fpr_at_95_tpr"]
+            print(f"Auroc,FPR95: {auroc:.4f},{fpr_auroc:.4f}")
+        else:
+            for k, v in metrics.items():
+                print(f"{k}: {v:.4f}")
 
         if self.args.wandb and is_main_process(self.args):
             wandb.log(metrics)
-
-        print(f"Auroc,FPR95: {auroc:.4f},{fpr_auroc:.4f}")
 
     def save_ckpt(self, aux_modules=None, iteration=None):
         if self.args.save_ckpt and (not self.args.distributed or self.args.global_rank == 0):

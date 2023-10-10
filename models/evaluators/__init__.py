@@ -8,3 +8,4 @@ from .resend import resend_evaluator
 from .flow import flow_evaluator
 from .EVM import EVM_evaluator
 from .ash import ASH_evaluator
+from .wise_comparator import wise_comparator
