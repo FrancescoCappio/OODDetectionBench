@@ -157,10 +157,14 @@ def knn_distance_evaluator(args, train_loader, test_loader, device, model, contr
     if args.enable_ratio_NN_unknown:
         ratio = ratio_NN_unknown(D, test_feats, ood_labels, cosine_sim)
 
-    test_normality_scores = D[:,-1]
-    if not cosine_sim:
+    KD = D[:, -1]    # distance for k-th Nearest neighbours
+    if cosine_sim:
+        test_normality_scores = KD
+        distances = 1 - KD   # cosine distance
+    else:
         # (inverted) distance from Kth nearest neighbour is the normality score 
-        test_normality_scores *= -1
+        test_normality_scores = -KD
+        distances = KD
 
     print(f"Num known: {ood_labels.sum()}. Num unknown: {len(test_lbls) - ood_labels.sum()}.")
 
@@ -169,10 +173,14 @@ def knn_distance_evaluator(args, train_loader, test_loader, device, model, contr
     metrics = calc_ood_metrics(test_normality_scores, ood_labels)
     metrics["cs_acc"] = cs_acc
 
+    metrics["avg_dist"] = distances.mean()
+    metrics["avg_dist_id"] = distances[ood_labels == 1].mean()
+    metrics["avg_dist_ood"] = distances[ood_labels == 0].mean()
+
     if not args.disable_R2:
         metric = "cosine_distance" if normalize else "euclidean_distance"
-        r2_metric = compute_R2(train_feats, train_lbls, metric)
-        metrics["support_R2"] = r2_metric
+        metrics["support_R2"] = compute_R2(train_feats, train_lbls, metric)
+        metrics["id_ood_R2"] = compute_R2(test_feats, ood_labels, metric)
     
     if args.enable_ranking_index:
         metric = "cosine_distance" if normalize else "euclidean_distance"

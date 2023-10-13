@@ -415,11 +415,17 @@ class Trainer:
         additional_metrics = [
             ("cs_acc", "Closed set accuracy"),
             ("support_R2", "Support set R2 score"),
+            ("id_ood_R2", "Test ID-OOD R2 score"),
             ("ratio_NN_unknown", "Ratio NN unknown"),
             ("ranking_index", "Ranking index"),
+            ("avg_dist", ""),
+            ("avg_dist_id", ""),
+            ("avg_dist_ood", ""),
         ]
         for k, name in additional_metrics:
             if k in metrics:
+                if not name:
+                    name = k.capitalize().replace("_", " ")
                 print(f"{name}: {metrics[k]:.4f}")
 
         if self.args.evaluator != "wise_comparator":
