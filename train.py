@@ -28,16 +28,12 @@ def get_args():
 
     parser.add_argument("--local_rank", type=int)  # automatically passed by torch.distributed.launch
 
-    parser.add_argument("--path_dataset", type=str, default='~/data', help="Base data path")
+    parser.add_argument("--path_dataset", type=str, default=None, help="Base data path")
 
-    parser.add_argument("--dataset", default="ImageNet", help="Dataset name",
-                        choices=['DTD', 'DomainNet_Real', 'DomainNet_Painting', 'DomainNet_Sketch', 'Places', 
-                                 'PACS_DG', 'PACS_SS_DG', 'imagenet_ood', 'imagenet_ood_small', 'DomainNet_DGv2',
-                                 'MCM_benchmarks', 'PatternNet', 'SUN', 'ImageNet1k', "Stanford_Cars"])
-    parser.add_argument("--support",
-                        help="support split name")
-    parser.add_argument("--test",
-                        help="test split name")
+    parser.add_argument("--dataset", help="Dataset name",
+                        choices=["domainnet", "dtd", "patternnet", "stanford_cars", "sun", "mcm_bench"])
+    parser.add_argument("--support", help="support split name")
+    parser.add_argument("--test", help="test split name")
     parser.add_argument("--data_order", type=int, default=-1, help="Which data order to use if more than one is available")
 
     # model parameters
@@ -106,7 +102,6 @@ def get_args():
     parser.add_argument("--suffix", type=str, default="", help="Additional suffix for the run name")
 
     args = parser.parse_args()
-    args.path_dataset = os.path.expanduser(args.path_dataset)
 
     return args
 
