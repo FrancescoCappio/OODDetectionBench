@@ -1,15 +1,50 @@
-
 def count_parameters(model):
     total_params = 0
     for _, parameter in model.named_parameters():
-        if not parameter.requires_grad: continue
+        if not parameter.requires_grad:
+            continue
         param = parameter.numel()
-        total_params+=param
+        total_params += param
     return total_params
 
 
-class LogUnbuffered:
+def gen_train_log_msg(it, n_iters, optims_dict, losses_dict, train_acc, log_period):
+    wandb_data = {}
+    log_msg_fields = [f"Iterations: {it+1:6d}/{n_iters}"]
 
+    # get the log and wandb suffixes given the item's name
+    get_suffixes = lambda name: (f"({name})", f"_{name}") if name else ("", "")
+
+    # LR
+    lr_msg_fields = []
+    for optim_name, optim_ in optims_dict.items():
+        current_lr = optim_.param_groups[0]["lr"]
+        msg_suffix, wandb_suffix = get_suffixes(optim_name)
+        lr_msg_fields.append(f"{current_lr:.6f}{msg_suffix}")
+        wandb_data[f"lr{wandb_suffix}"] = current_lr
+    lr_msg = ", ".join(lr_msg_fields)
+    log_msg_fields.append(f"LR: {lr_msg}")
+
+    # Loss
+    loss_msg_fields = []
+    for loss_name, loss_ in losses_dict.items():
+        avg_loss = loss_ / log_period
+        msg_suffix, wandb_suffix = get_suffixes(loss_name)
+        loss_msg_fields.append(f"{avg_loss:6.4f}{msg_suffix}")
+        wandb_data[f"loss{wandb_suffix}"] = avg_loss
+    loss_msg = ", ".join(loss_msg_fields)
+    log_msg_fields.append(f"Loss: {loss_msg}")
+
+    # Acc
+    wandb_data["acc"] = train_acc
+    log_msg_fields.append(f"Acc: {train_acc:6.4f}")
+
+    log_msg = "\t".join(log_msg_fields)
+
+    return log_msg, wandb_data
+
+
+class LogUnbuffered:
     def __init__(self, args, stream, out_file=None):
         self.args = args
         if self.args.distributed and self.args.global_rank > 0:
@@ -18,7 +53,7 @@ class LogUnbuffered:
 
         self.stream = stream
         if out_file:
-            self.out_file = open(out_file, 'a')
+            self.out_file = open(out_file, "a")
         else:
             self.out_file = None
 
@@ -27,9 +62,9 @@ class LogUnbuffered:
             return
         self.stream.write(data)
         if self.out_file:
-            self.out_file.write(data)    # Write the data of stdout here to a text file as well
+            self.out_file.write(data)  # Write the data of stdout here to a text file as well
         self.flush()
-    
+
     def flush(self):
         if self.args.distributed and self.args.global_rank > 0:
             return
@@ -40,4 +75,3 @@ class LogUnbuffered:
     def close(self):
         if self.out_file:
             self.out_file.close()
-

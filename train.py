@@ -14,7 +14,7 @@ from models.data_helper import check_data_consistency, get_eval_dataloader, get_
 from models.evaluators import *
 from models.models_helper import get_model
 from utils.dist_utils import is_main_process
-from utils.log_utils import LogUnbuffered, count_parameters
+from utils.log_utils import LogUnbuffered, count_parameters, gen_train_log_msg
 from utils.optim import LinearWarmupCosineAnnealingLR
 from utils.utils import get_aux_modules_dict
 
@@ -237,7 +237,7 @@ class Trainer:
         else:
             raise NotImplementedError(f"Unknown evaluator {self.args.evaluator}")
 
-        additional_metrics = [
+        optional_metrics = [
             ("cs_acc", "Closed set accuracy"),
             ("support_R2", "Support set R2 score"),
             ("id_ood_R2", "Test ID-OOD R2 score"),
@@ -248,9 +248,9 @@ class Trainer:
             ("avg_dist_ood", "Avg dist OOD"),
         ]
 
-        for k, name in additional_metrics:
-            if k in metrics:
-                print(f"{name}: {metrics[k]:.4f}")
+        for id, name in optional_metrics:
+            if id in metrics:
+                print(f"{name}: {metrics[id]:.4f}")
 
         auroc = metrics["auroc"]
         fpr_auroc = metrics["fpr_at_95_tpr"]
@@ -288,44 +288,10 @@ class Trainer:
         last_iter = aux_data["last_iter"]
         return True, last_iter
 
-    def do_train_logging(self, it, optims_dict, losses_dict, train_acc, log_period):
-        wandb_data = {}
-        log_msg_fields = [f"Iterations: {it+1:6d}/{self.args.iterations}"]
-
-        # get the log and wandb suffixes given the item's name
-        get_suffixes = lambda name: (f"({name})", f"_{name}") if name else ("", "")
-
-        # LR
-        lr_msg_fields = []
-        for optim_name, optim_ in optims_dict.items():
-            current_lr = optim_.param_groups[0]["lr"]
-            msg_suffix, wandb_suffix = get_suffixes(optim_name)
-            lr_msg_fields.append(f"{current_lr:.6f}{msg_suffix}")
-            wandb_data[f"lr{wandb_suffix}"] = current_lr
-        lr_msg = ', '.join(lr_msg_fields)
-        log_msg_fields.append(f"LR: {lr_msg}")
-
-        # Loss
-        loss_msg_fields = []
-        for loss_name, loss_ in losses_dict.items():
-            avg_loss = loss_ / log_period
-            msg_suffix, wandb_suffix = get_suffixes(loss_name)
-            loss_msg_fields.append(f"{avg_loss:6.4f}{msg_suffix}")
-            wandb_data[f"loss{wandb_suffix}"] = avg_loss
-        loss_msg = ', '.join(loss_msg_fields)
-        log_msg_fields.append(f"Loss: {loss_msg}")
-
-        # Acc
-        wandb_data["acc"] = train_acc
-        log_msg_fields.append(f"Acc: {train_acc:6.4f}")
-
-        print(*log_msg_fields, sep="\t")
-        
-        if self.args.wandb and is_main_process(self.args):
-            wandb.log(wandb_data, step=it)
-
     def do_train(self):
-        # prepare data 
+        self.to_train()
+
+        ### Prepare data ###
         
         train_loader = get_train_dataloader(self.args)
 
@@ -335,18 +301,27 @@ class Trainer:
 
         check_data_consistency(train_loader, self.support_test_loader)
 
+        ### Adjust n_iters and lr ###
+
         if self.args.epochs > 0: 
             iters_per_epoch = len(train_loader)
             self.args.iterations = self.args.epochs * iters_per_epoch
-
             if self.args.warmup_epochs > 0:
                 self.args.warmup_iters = self.args.warmup_epochs * iters_per_epoch
 
         if self.args.distributed:
             self.args.learning_rate *= self.args.n_gpus
-        self.to_train()
 
-        # prepare optimizer
+        ### Prepare loss, optimizer and scheduler ###
+
+        # loss function 
+        loss_fn = nn.CrossEntropyLoss(label_smoothing=self.args.label_smoothing)
+
+        def get_optim_sched(params, lr):
+            optim_ = optim.Adam(params, lr=lr, weight_decay=1e-5)
+            sched_ = LinearWarmupCosineAnnealingLR(optim_, warmup_epochs=self.args.warmup_iters, max_epochs=self.args.iterations)
+            return optim_, sched_
+
         if self.args.freeze_backbone:
             if hasattr(self.raw_model, "fc"):
                 optim_params = self.raw_model.fc.parameters()
@@ -359,43 +334,41 @@ class Trainer:
         else:
             optim_params = self.model.parameters()
 
-        def get_optim_sched(params, lr):
-            optim_ = optim.Adam(params, lr=lr, weight_decay=1e-5)
-            sched_ = LinearWarmupCosineAnnealingLR(optim_, warmup_epochs=self.args.warmup_iters, max_epochs=self.args.iterations)
-            return optim_, sched_
-
         optimizer, scheduler = get_optim_sched(optim_params, self.args.learning_rate)
         if self.args.nf_head:
             optimizer_nf, scheduler_nf = get_optim_sched(self.raw_model.nf.parameters(), self.args.learning_rate * self.args.nf_lr_mult)
+
+        ### Resuming ###
+
+        start_it = 0
 
         if self.args.resume:
             aux_modules = get_aux_modules_dict(optimizer, scheduler)
             if self.args.nf_head:
                 aux_modules.update(get_aux_modules_dict(optimizer_nf, scheduler_nf, suffix="nf"))
             resume_possible, resume_it = self.resume(aux_modules)
-            if not resume_possible:
-                print("Cannot resume, ckpt does not exist or is not complete")
-                start_it = 0
-            else:
+            if resume_possible:
                 start_it = resume_it + 1
                 print(f"Training resumed from it {start_it}")
-        else:
-            start_it = 0
+            else:
+                print("Cannot resume, ckpt does not exist or is not complete")
 
-        # loss function 
-        loss_fn = nn.CrossEntropyLoss(label_smoothing=self.args.label_smoothing)
+        ### Training stats ###
 
-        train_iter = iter(train_loader)
         log_period = 10
         ckpt_period = 500
         running_loss = 0
         if self.args.nf_head:
             running_loss_nf = 0
 
+        # batch iterator
+        train_iter = iter(train_loader)
+
         print(f"Start training, lr={self.args.learning_rate}, start_iter={start_it}, iterations={self.args.iterations}, warmup_iters={self.args.warmup_iters}")
 
-        for it in range(start_it, self.args.iterations):
+        ### Training loop ###
 
+        for it in range(start_it, self.args.iterations):
             try: 
                 batch = next(train_iter)
             except StopIteration:
@@ -428,20 +401,25 @@ class Trainer:
                 scheduler_nf.step()
                 running_loss_nf += loss_nf.item()
 
-            if (it+1) % log_period == 0:
+            # logging
+            if (it + 1) % log_period == 0:
                 _, preds = outputs.max(dim=1)
-                train_acc = ((preds == labels).sum()/len(preds)).cpu().item()
+                train_acc = ((preds == labels).sum() / len(preds)).item()
                 optims_dict = {"": optimizer}
                 losses_dict = {"": running_loss}
                 if self.args.nf_head:
                     optims_dict["nf"] = optimizer_nf
                     losses_dict["nf"] = running_loss_nf
-                self.do_train_logging(it, optims_dict, losses_dict, train_acc, log_period)
+                log_msg, wandb_log_data = gen_train_log_msg(it, self.args.iterations, optims_dict, losses_dict, train_acc, log_period)
+                print(log_msg)
+                if self.args.wandb and is_main_process(self.args):
+                    wandb.log(wandb_log_data, step=it)
                 running_loss = 0
                 if self.args.nf_head:
                     running_loss_nf = 0
 
-            if (it+1) % ckpt_period == 0:
+            # ckpt saving
+            if (it + 1) % ckpt_period == 0:
                 aux_modules = get_aux_modules_dict(optimizer, scheduler)
                 if self.args.nf_head:
                     aux_modules.update(get_aux_modules_dict(optimizer_nf, scheduler_nf, suffix="nf"))
@@ -509,9 +487,10 @@ def main():
             run_name += f"_{args.suffix}"
 
         wandb.init(
-                project="OODDetectionFramework",
-                config=vars(args),
-                name=run_name)
+            project="OODDetectionFramework",
+            config=vars(args),
+            name=run_name,
+        )
     
     if args.print_args:
         print(args)
@@ -524,6 +503,7 @@ def main():
         assert not args.distributed, f"{args.evaluator} evaluator does not support distributed execution!"
 
     trainer = Trainer(args, device)
+
     if not args.only_eval:
         trainer.do_train()
 
