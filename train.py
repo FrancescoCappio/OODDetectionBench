@@ -43,7 +43,7 @@ def get_args():
                                                                     "resend", "DINOv2", "BiT", "CE-IM22k", "random_init", "CE-IM21k"])
     parser.add_argument("--evaluator", type=str, help="Strategy to compute normality scores", default="prototypes_distance",
                         choices=["prototypes_distance", "MSP", "MLS", "ODIN", "energy", "gradnorm", "mahalanobis", "gram", "knn_distance",
-                                 "linear_probe", "MCM", "knn_ood", "resend", "react", "flow", "EVM", "EVM_norm", "ASH", "wise_comparator"])
+                                 "linear_probe", "MCM", "knn_ood", "resend", "react", "flow", "EVM", "EVM_norm", "ASH"])
 
     # evaluators-specific parameters 
     parser.add_argument("--NNK", help="K value to use for Knn distance evaluator", type=int, default=1)
@@ -236,10 +236,6 @@ class Trainer:
             metrics = flow_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader, device=self.device,
                                             model=self.model)
 
-        elif self.args.evaluator == "wise_comparator":
-            metrics = wise_comparator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
-                                            device=self.device, model=self.model, ckpts=self.ckpts)
-
         else:
             raise NotImplementedError(f"Unknown evaluator {self.args.evaluator}")
 
@@ -259,13 +255,9 @@ class Trainer:
                     name = k.capitalize().replace("_", " ")
                 print(f"{name}: {metrics[k]:.4f}")
 
-        if self.args.evaluator != "wise_comparator":
-            auroc = metrics["auroc"]
-            fpr_auroc = metrics["fpr_at_95_tpr"]
-            print(f"Auroc,FPR95: {auroc:.4f},{fpr_auroc:.4f}")
-        else:
-            for k, v in metrics.items():
-                print(f"{k}: {v:.4f}")
+        auroc = metrics["auroc"]
+        fpr_auroc = metrics["fpr_at_95_tpr"]
+        print(f"Auroc,FPR95: {auroc:.4f},{fpr_auroc:.4f}")
 
         if self.args.wandb and is_main_process(self.args):
             wandb.log(metrics)
