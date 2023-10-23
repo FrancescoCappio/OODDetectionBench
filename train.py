@@ -1,22 +1,22 @@
 import argparse
 import os
 import sys
-from os.path import join
 from os import environ
+from os.path import join
 
 import torch
-from torch import nn, optim
-from torch.nn.parallel import DistributedDataParallel as DDP 
 import torch.distributed as dist
+from torch import nn, optim
 from torch.distributed.elastic.multiprocessing.errors import record
+from torch.nn.parallel import DistributedDataParallel as DDP
 
-from models.resnet import get_resnet
-from models.data_helper import get_eval_dataloader, get_train_dataloader, split_train_loader, check_data_consistency
-from utils.log_utils import count_parameters, LogUnbuffered
-from utils.optim import LinearWarmupCosineAnnealingLR
-from utils.utils import clean_ckpt, get_aux_modules_dict, interpolate_ckpts
-from utils.dist_utils import is_main_process
+from models.data_helper import check_data_consistency, get_eval_dataloader, get_train_dataloader, split_train_loader
 from models.evaluators import *
+from models.models_helper import get_model
+from utils.dist_utils import is_main_process
+from utils.log_utils import LogUnbuffered, count_parameters
+from utils.optim import LinearWarmupCosineAnnealingLR
+from utils.utils import get_aux_modules_dict
 
 try:
     import wandb 
@@ -94,13 +94,11 @@ def get_args():
 
     # save run on wandb 
     parser.add_argument("--wandb", action='store_true', default=False, help="Save this run on wandb")
+    parser.add_argument("--suffix", type=str, default="", help="Additional suffix for the run name on wandb")
 
     # performance options 
     parser.add_argument("--on_disk", action='store_true', default=False, help="Save/Recover extracted features on the disk. To be used for really large ID datasets (e.g. ImageNet)")
     
-    # run name
-    parser.add_argument("--suffix", type=str, default="", help="Additional suffix for the run name")
-
     args = parser.parse_args()
 
     return args
@@ -245,14 +243,13 @@ class Trainer:
             ("id_ood_R2", "Test ID-OOD R2 score"),
             ("ratio_NN_unknown", "Ratio NN unknown"),
             ("ranking_index", "Ranking index"),
-            ("avg_dist", ""),
-            ("avg_dist_id", ""),
-            ("avg_dist_ood", ""),
+            ("avg_dist", "Avg dist"),
+            ("avg_dist_id", "Avg dist ID"),
+            ("avg_dist_ood", "Avg dist OOD"),
         ]
+
         for k, name in additional_metrics:
             if k in metrics:
-                if not name:
-                    name = k.capitalize().replace("_", " ")
                 print(f"{name}: {metrics[k]:.4f}")
 
         auroc = metrics["auroc"]
@@ -291,42 +288,41 @@ class Trainer:
         last_iter = aux_data["last_iter"]
         return True, last_iter
 
-    def get_train_log_fn(self, loss_divider):
-        def get_suffixes(name):
-            return (f"({name}) ", f"_{name}") if name else ("", "")
+    def do_train_logging(self, it, optims_dict, losses_dict, train_acc, log_period):
+        wandb_data = {}
+        log_msg_fields = [f"Iterations: {it+1:6d}/{self.args.iterations}"]
 
-        def do_logging(it, optims_dict, losses_dict, train_acc):
-            wandb_data = {}
-            log_msg = [f"Iterations: {it+1:6d}/{self.args.iterations}"]
-            # LR
-            msg = ""
-            for name, optim_ in optims_dict.items():
-                if msg: msg += ", "
-                current_lr = optim_.param_groups[0]["lr"]
-                log_suffix, wandb_suffix = get_suffixes(name)
-                msg += f"{current_lr:.6f}{log_suffix}"
-                wandb_data[f"lr{wandb_suffix}"] = current_lr
-            log_msg.append(f"LR: {msg}")
-            # Loss
-            msg = ""
-            for name, loss_ in losses_dict.items():
-                if msg: msg += ", "
-                avg_loss = loss_ / loss_divider
-                log_suffix, wandb_suffix = get_suffixes(name)
-                msg += f"{avg_loss:6.4f}{log_suffix}"
-                wandb_data[f"loss{wandb_suffix}"] = avg_loss
-            log_msg.append(f"Loss: {msg}")
-            # Acc
-            log_msg.append(f"Acc: {train_acc:6.4f}")
-            wandb_data["acc"] = train_acc
+        # get the log and wandb suffixes given the item's name
+        get_suffixes = lambda name: (f"({name})", f"_{name}") if name else ("", "")
 
-            print(*log_msg, sep="\t")
-            
-            if self.args.wandb and is_main_process(self.args):
-                wandb.log(wandb_data, step=it)
+        # LR
+        lr_msg_fields = []
+        for optim_name, optim_ in optims_dict.items():
+            current_lr = optim_.param_groups[0]["lr"]
+            msg_suffix, wandb_suffix = get_suffixes(optim_name)
+            lr_msg_fields.append(f"{current_lr:.6f}{msg_suffix}")
+            wandb_data[f"lr{wandb_suffix}"] = current_lr
+        lr_msg = ', '.join(lr_msg_fields)
+        log_msg_fields.append(f"LR: {lr_msg}")
 
-        return do_logging
+        # Loss
+        loss_msg_fields = []
+        for loss_name, loss_ in losses_dict.items():
+            avg_loss = loss_ / log_period
+            msg_suffix, wandb_suffix = get_suffixes(loss_name)
+            loss_msg_fields.append(f"{avg_loss:6.4f}{msg_suffix}")
+            wandb_data[f"loss{wandb_suffix}"] = avg_loss
+        loss_msg = ', '.join(loss_msg_fields)
+        log_msg_fields.append(f"Loss: {loss_msg}")
 
+        # Acc
+        wandb_data["acc"] = train_acc
+        log_msg_fields.append(f"Acc: {train_acc:6.4f}")
+
+        print(*log_msg_fields, sep="\t")
+        
+        if self.args.wandb and is_main_process(self.args):
+            wandb.log(wandb_data, step=it)
 
     def do_train(self):
         # prepare data 
@@ -396,8 +392,6 @@ class Trainer:
         if self.args.nf_head:
             running_loss_nf = 0
 
-        train_log_fn = self.get_train_log_fn(log_period)
-
         print(f"Start training, lr={self.args.learning_rate}, start_iter={start_it}, iterations={self.args.iterations}, warmup_iters={self.args.warmup_iters}")
 
         for it in range(start_it, self.args.iterations):
@@ -442,7 +436,7 @@ class Trainer:
                 if self.args.nf_head:
                     optims_dict["nf"] = optimizer_nf
                     losses_dict["nf"] = running_loss_nf
-                train_log_fn(it, optims_dict, losses_dict, train_acc)
+                self.do_train_logging(it, optims_dict, losses_dict, train_acc, log_period)
                 running_loss = 0
                 if self.args.nf_head:
                     running_loss_nf = 0
