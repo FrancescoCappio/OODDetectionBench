@@ -120,7 +120,7 @@ def get_eval_dataloader(args):
         train_dataset_txt_path = path.join(PATH_TO_TXT, args.dataset, f"{args.support}.txt")
         names_support, labels_support = _get_dataset_info_from_txt(train_dataset_txt_path)
 
-        if args.support in ["Stanford-Cars", "CUB-200", "Oxford-Pet", "imagenet"]:
+        if args.support in ["stanford_cars", "cub_200", "oxford_pet", "imagenet"]:
             class_names_file = path.join(PATH_TO_TXT, args.dataset, f"{args.support}_names.txt")
             print(f"Reading class names from: {class_names_file}")
             with open(class_names_file, "r") as f:
