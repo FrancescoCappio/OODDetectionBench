@@ -108,197 +108,33 @@ def get_args():
 class Trainer:
     def __init__(self, args, device):
         self.args = args
-        self.device = device
-        self.args.device = device
+        self.device = self.args.device = device
+
+        ### Data ###
 
         # load the support and test set dataloaders 
-        self.target_loader, self.support_test_loader, known_class_names, n_known_classes = get_eval_dataloader(self.args)
-        self.known_class_names = known_class_names
+        self.target_loader, self.support_test_loader, self.known_class_names, self.n_known_classes = get_eval_dataloader(self.args)
 
         if self.args.evaluator == "gram":
             # this method needs a split of support data to be used as validation set 
             self.support_test_loader, self.support_val_loader = split_train_loader(self.support_test_loader, args.seed)
 
-        self.n_known_classes = n_known_classes
-        self.contrastive_enabled = False
+        self.args.n_known_classes = self.n_known_classes
+
+        ### Model ###
+
         print(f"Model: {self.args.model}, Backbone: {self.args.network}")
 
-        ckpt_device = device if args.evaluator != "wise_comparator" else "cpu"
-        ckpt = torch.load(self.args.checkpoint_path, map_location=ckpt_device) if self.args.checkpoint_path else None
+        ckpt = torch.load(self.args.checkpoint_path, map_location=device) if self.args.checkpoint_path else None
 
         # setup the network and OOD model 
-        if self.args.network == "resnet101":
-            if self.args.model in ["CE", "cutmix"]:
-                if self.args.model == "cutmix" and self.args.only_eval:
-                    assert ckpt is not None, "Cannot perform eval without a pretrained model"
+        self.model, self.output_num, self.contrastive_enabled = get_model(self.args, self.n_known_classes, device, ckpt)
+        if args.model == "clip":
+            self.clip_model = self.model
 
-                self.model, self.output_num = get_resnet(self.args.network, n_known_classes=self.n_known_classes)
-
-                # if ckpt fc size does not match current size discard it
-                if ckpt is not None: 
-                    old_size = ckpt["fc.bias"].shape[0]
-                    if not old_size == self.n_known_classes:
-                        del ckpt["fc.weight"]
-                        del ckpt["fc.bias"]
-            elif self.args.model == "random_init":
-                self.model, self.output_num = get_resnet(self.args.network, n_known_classes=self.n_known_classes, random_init=True)
-
-            elif self.args.model in ["simclr", "supclr", "CSI", "supCSI"]:
-                self.contrastive_enabled = not args.disable_contrastive_head
-                if self.args.only_eval:
-                    assert ckpt is not None, "Cannot perform eval without a pretrained model"
-
-                contrastive_type = "simclr" if self.args.model in ["simclr", "supclr"] else "CSI"
-
-                from models.common import WrapperWithContrastiveHead
-                base_model, self.output_num = get_resnet(self.args.network, n_known_classes=self.n_known_classes)
-                self.model = WrapperWithContrastiveHead(base_model, out_dim=self.output_num, contrastive_type=contrastive_type)
-                if not args.disable_contrastive_head:
-                    self.output_num = self.model.contrastive_out_dim
-                
-                # if ckpt fc size does not match current size discard it
-                if ckpt is not None: 
-                    old_size = ckpt["base_model.fc.bias"].shape[0]
-                    if not old_size == self.n_known_classes:
-                        del ckpt["base_model.fc.weight"]
-                        del ckpt["base_model.fc.bias"]
-
-            elif self.args.model == "clip":
-                import clip 
-
-                model, preprocess = clip.load("RN101", self.device)
-                self.clip_model = model
-
-                # the model has no fc by default, so it does not support closed set finetuning
-                from models.common import WrapperWithFC
-                self.output_num = 512
-                self.model = WrapperWithFC(model.visual, self.output_num, self.n_known_classes, half_precision=True)
-
-            else:
-                raise NotImplementedError(f"Model {self.args.model} is not supported with network {self.args.network}")
-
-        elif self.args.network == "vit":
-            if self.args.model in ["CE", "DINO"]:
-
-                import timm
-                self.output_num = 768
-
-                if self.args.model == "DINO":
-                    if not self.args.checkpoint_path:
-                        raise AssertionError("Specify ckpt for DINO")
-
-                    # we set num_classes to 0 in order to obtain pooled feats
-                    model = timm.create_model("deit_base_patch16_224", pretrained=True, num_classes=0)
-
-                    if self.args.nf_head:
-                        from models.common import WrapperWithNF
-                        self.model = WrapperWithNF(model, self.output_num, self.n_known_classes)
-                    else:
-                        # if we didn't need the contrastive head we could use the model from huggingface:
-                        # https://huggingface.co/facebook/dino-vitb16
-                        self.contrastive_enabled = not args.disable_contrastive_head
-                        from models.common import WrapperWithContrastiveHead
-                        self.model = WrapperWithContrastiveHead(model, out_dim=self.output_num, contrastive_type="DINO", 
-                                                                add_cls_head=True, n_classes=self.n_known_classes)
-                        if not args.disable_contrastive_head:
-                            self.output_num = self.model.contrastive_out_dim
-
-                else:
-                    import types 
-
-                    # we set num_classes to 0 in order to obtain pooled feats
-                    model = timm.create_model("deit_base_patch16_224", pretrained=True)
-                    model.fc = model.head
-
-                    if not self.n_known_classes == 1000:
-                        model.fc = nn.Linear(in_features=768, out_features=self.n_known_classes)
-
-                    def my_forward(self, x):
-                        feats = self.forward_head(self.forward_features(x), pre_logits=True)
-                        logits = self.fc(feats)
-                        return logits, feats
-
-                    model.forward = types.MethodType(my_forward, model)
-
-                    if self.args.nf_head:
-                        from models.common import WrapperWithNF
-                        self.model = WrapperWithNF(model, self.output_num, add_cls_head=False)
-                    else:
-                        self.model = model 
-
-            elif self.args.model == "clip":
-                # ViT-B/16
-                import clip 
-
-                model, preprocess = clip.load("ViT-L/14", self.device)
-                self.clip_model = model
-                # the model has no fc by default, so it does not support closed set finetuning
-                from models.common import WrapperWithFC
-                self.output_num = 768
-                self.model = WrapperWithFC(model.visual, self.output_num, self.n_known_classes, half_precision=True)
-
-            elif self.args.model == "DINOv2":
-                from models.common import WrapperWithFC, WrapperWithNF
-                wrapper = WrapperWithNF if self.args.nf_head else WrapperWithFC
-                dinov2_vitb14 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14')
-                self.output_num = 1024
-                self.model = wrapper(dinov2_vitb14, self.output_num, self.n_known_classes)
-
-            elif self.args.model == "CE-IM22k" or self.args.model == "CE-IM21k":
-                # https://huggingface.co/google/vit-large-patch16-224-in21k
-                from transformers import ViTModel
-                model = ViTModel.from_pretrained('google/vit-large-patch16-224-in21k')
-                self.output_num = 1024
-                from models.common import WrapperWithFC
-                self.model = WrapperWithFC(model, self.output_num, self.n_known_classes, base_output_map=lambda x: x["pooler_output"])
-            else:
-                raise NotImplementedError(f"Model {self.args.model} is not supported with network {self.args.network}")
-        
-        elif self.args.network == "resnetv2_101x3":
-            assert self.args.model == "BiT", f"The network {self.args.network} supports only BiT model"
-
-            # we set num_classes to 0 in order to obtain pooled feats
-            import timm 
-            from models.common import WrapperWithFC, WrapperWithNF
-            wrapper = WrapperWithNF if self.args.nf_head else WrapperWithFC
-            # https://huggingface.co/timm/resnetv2_101x3_bit.goog_in21k
-            model = timm.create_model('resnetv2_101x3_bit.goog_in21k', pretrained=True, num_classes=0)
-            self.output_num = 6144
-            self.model = wrapper(model, self.output_num, self.n_known_classes)
-
-        elif self.args.network == "resend":
-            assert self.args.only_eval and ckpt is not None, "Cannot perform eval without a pretrained model"
-
-            from models.resend import ReSeND
-
-            self.model = ReSeND(n_known_classes=self.n_known_classes)
-            self.output_num = self.model.output_num
-        else:
-            raise NotImplementedError(f"Network {self.args.network} not implemented")
-
-        if ckpt is not None and self.args.wise_ft_alpha > 0:
-            print(f"Loading checkpoint {self.args.checkpoint_path}")
-            assert self.args.wise_ft_alpha <= 1, "wise_ft_alpha must be a value betweeen 0 and 1"
-            if self.args.wise_ft_alpha == 1:
-                missing, unexpected = self.model.load_state_dict(clean_ckpt(ckpt, self.model), strict=False)
-                print(f"Missing keys: {missing}, unexpected keys: {unexpected}")
-            else:
-                print(f"Interpolating weights with alpha={self.args.wise_ft_alpha}")
-                self.to_device(ckpt_device)
-                zeroshot_ckpt = self.model.state_dict()
-                wise_ckpt = interpolate_ckpts(zeroshot_ckpt, ckpt, self.args.wise_ft_alpha)
-                if self.args.evaluator != "wise_comparator":
-                    self.model.load_state_dict(wise_ckpt)
-                else:
-                    self.ckpts = {
-                        "zeroshot": (zeroshot_ckpt, ckpt_device),
-                        "wise": (wise_ckpt, ckpt_device),
-                        "ft": (ckpt, ckpt_device),
-                    }
+        self.args.output_num = self.output_num
 
         self.to_device(self.device)
-        self.args.output_num = self.output_num
-        self.args.n_known_classes = self.n_known_classes
 
         self.raw_model = self.model # maintain access to the "raw" internal module in case of DDP
         if self.args.distributed:
