@@ -57,7 +57,8 @@ def run_model(args, model, loader, device, flow=False, contrastive=False, suppor
     batch_size = loader.batch_size
     if args.on_disk:
         feats_np, logits_np, gts_np, load = get_disk_mm(args, ds_size=ds_size, support=support)
-    else: 
+    else:
+        # for "flow" models, what we call "feats" are actually the log likelihoods for the samples
         feats_np = -np.ones(dtype=np.float32, shape=((ds_size, args.output_num) if not flow else (ds_size,)))
         logits_np = -np.ones(dtype=np.float32, shape=(ds_size, args.n_known_classes))
         gts_np = -np.ones(dtype=int, shape=(ds_size,))

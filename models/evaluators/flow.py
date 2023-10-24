@@ -10,8 +10,8 @@ from models.evaluators.common import (
 
 
 @torch.no_grad()
-def flow_evaluator(args, train_loader, test_loader, device, model, s=0):
-    train_lbls = train_loader.dataset.labels
+def flow_evaluator(args, train_loader, test_loader, device, model):
+    train_lbls = np.array(train_loader.dataset.labels)
     test_logits, test_lls, test_lbls = run_model(
         args, model, test_loader, device, flow=True, support=False
     )

@@ -110,7 +110,7 @@ class Dataset(data.Dataset):
 def get_eval_dataloader(args):
     path_dataset = args.path_dataset
 
-    print(f"Dataset {args.dataset}, train_data: {args.support}, test_data: {args.test}", end="")
+    print(f"Dataset: {args.dataset}, train_data: {args.support}, test_data: {args.test}", end="")
     print(f", data_order: {args.data_order}") if args.data_order >= 0 else print()
 
     if args.dataset == "mcm_bench":
@@ -201,7 +201,7 @@ def get_eval_dataloader(args):
 def get_train_dataloader(args):
     path_dataset = args.path_dataset
 
-    print(f"Dataset {args.dataset}, train_data: {args.support}", end="")
+    print(f"Dataset: {args.dataset}, train_data: {args.support}", end="")
     print(f", data_order: {args.data_order}") if args.data_order >= 0 else print()
 
     if args.dataset == "mcm_bench":
