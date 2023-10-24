@@ -225,6 +225,7 @@ def get_train_dataloader(args):
         )
 
     img_tr = get_train_transform(args)
+    path_dataset = path.expanduser(path_dataset)
     train_dataset = Dataset(names_supports, labels_supports, path_dataset, transform=img_tr)
 
     if len(train_dataset) < args.train_batch_size:
