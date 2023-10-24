@@ -84,7 +84,11 @@ def get_args():
     parser.add_argument("--only_eval", action='store_true', default=False,
                         help="If you want only to evaluate a checkpoint")
     parser.add_argument("--checkpoint_path", type=str, default="", help="Path to pretrained checkpoint")
-    parser.add_argument("--wise_ft_alpha", type=float, default=1.0, help="Alpha value for WiSE-FT interpolation")
+
+    # WiSE-FT
+    parser.add_argument("--wise_ft_alpha", type=float, default=1, help="Alpha value for WiSE-FT interpolation")
+    parser.add_argument("--wise_ft_zs_ckpt_path", type=str, default="",
+                        help="Path to zeroshot checkpoint for WiSE-FT interpolation (optional)")
 
     # output_folder for checkpoints
     parser.add_argument("--save_ckpt", action='store_true', default=False, help="Should save the training output checkpoint to --output_dir?")
@@ -112,7 +116,6 @@ class Trainer:
 
         # load the support and test set dataloaders 
         self.target_loader, self.support_test_loader, self.known_class_names, self.n_known_classes = get_eval_dataloader(self.args)
-
         if self.args.evaluator == "gram":
             # this method needs a split of support data to be used as validation set 
             self.support_test_loader, self.support_val_loader = split_train_loader(self.support_test_loader, args.seed)
@@ -123,10 +126,8 @@ class Trainer:
 
         print(f"Model: {self.args.model}, Backbone: {self.args.network}")
 
-        ckpt = torch.load(self.args.checkpoint_path, map_location=device) if self.args.checkpoint_path else None
-
         # setup the network and OOD model 
-        self.model, self.output_num, self.contrastive_enabled = get_model(self.args, self.n_known_classes, device, ckpt)
+        self.model, self.output_num, self.contrastive_enabled = get_model(self.args)
         if args.model == "clip":
             self.clip_model = self.model
 

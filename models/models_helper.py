@@ -7,7 +7,7 @@ from .resnet import get_resnet
 def _clean_ckpt(ckpt, model):
     new_dict = {}
     model_dict = model.state_dict()
-    for k in ckpt.keys():
+    for k in ckpt:
         new_k = k
         if k not in model_dict:
             if k.startswith("base_model"):
@@ -18,46 +18,51 @@ def _clean_ckpt(ckpt, model):
             elif k.startswith("flow_module"):
                 new_k = k.replace("flow_module", "nf")
             ###
-        new_dict[new_k] = ckpt[k]
+        if not new_k.startswith("nf") or hasattr(model, "nf"):
+            new_dict[new_k] = ckpt[k]
     return new_dict
 
 
 def _interpolate_ckpts(zeroshot_ckpt, finetuned_ckpt, alpha):
-    # make sure checkpoints are compatible
-    assert set(zeroshot_ckpt.keys()) == set(finetuned_ckpt.keys())
-    # interpolate between all weights in the checkpoints
-    new_state_dict = {
-        k: (1 - alpha) * zeroshot_ckpt[k] + alpha * finetuned_ckpt[k] for k in zeroshot_ckpt.keys()
-    }
-    return new_state_dict
+    print(f"Interpolating weights with alpha={alpha}")
+    missing_keys = []
+    new_dict = {}
+    for k in zeroshot_ckpt:
+        if k in finetuned_ckpt:
+            new_dict[k] = (1 - alpha) * zeroshot_ckpt[k] + alpha * finetuned_ckpt[k]
+        else:
+            missing_keys.append(k)
+    if missing_keys:
+        print(f"Missing keys from finetuned ckpt: {missing_keys}")
+    return new_dict
 
 
-def _load_ckpt(model, ckpt, alpha, ckpt_device):
-    assert alpha >= 0 and alpha <= 1, "wise_ft_alpha must be a value betweeen 0 and 1"
-    if alpha == 1:
-        missing, unexpected = model.load_state_dict(_clean_ckpt(ckpt, model), strict=False)
-        print(f"Missing keys: {missing}, unexpected keys: {unexpected}")
-    elif alpha > 0:
-        print(f"Interpolating weights with alpha={alpha}")
-        model.to(ckpt_device)
-        ckpt = _interpolate_ckpts(model.state_dict(), ckpt, alpha)
-        model.load_state_dict(ckpt)
+def get_model(args):
+    device = args.device
+    n_known_classes = args.n_known_classes
+    wise_ft_alpha = args.wise_ft_alpha
 
-
-def get_model(args, n_known_classes, device, ckpt):
     model = None
     output_num = None
     contrastive_enabled = False
 
+    ckpts = []
+    if args.checkpoint_path:
+        print(f"Loading ckpt: {args.checkpoint_path}")
+        ckpts.append(torch.load(args.checkpoint_path, map_location=device))
+        if args.wise_ft_zs_ckpt_path:
+            print(f"Loading zeroshot ckpt: {args.wise_ft_zs_ckpt_path}")
+            ckpts.append(torch.load(args.wise_ft_zs_ckpt_path, map_location=device))
+
     if args.network == "resnet101":
         if args.model in ["CE", "cutmix"]:
             if args.model == "cutmix" and args.only_eval:
-                assert ckpt is not None, "Cannot perform eval without a pretrained model"
+                assert ckpts, "Cannot perform eval without a pretrained model"
 
             model, output_num = get_resnet(args.network, n_known_classes=n_known_classes)
 
             # if ckpt fc size does not match current size discard it
-            if ckpt is not None:
+            for ckpt in ckpts:
                 old_size = ckpt["fc.bias"].shape[0]
                 if not old_size == n_known_classes:
                     del ckpt["fc.weight"]
@@ -70,7 +75,7 @@ def get_model(args, n_known_classes, device, ckpt):
         elif args.model in ["simclr", "supclr", "CSI", "supCSI"]:
             contrastive_enabled = not args.disable_contrastive_head
             if args.only_eval:
-                assert ckpt is not None, "Cannot perform eval without a pretrained model"
+                assert ckpts, "Cannot perform eval without a pretrained model"
 
             contrastive_type = "simclr" if args.model in ["simclr", "supclr"] else "CSI"
 
@@ -84,7 +89,7 @@ def get_model(args, n_known_classes, device, ckpt):
                 output_num = model.contrastive_out_dim
 
             # if ckpt fc size does not match current size discard it
-            if ckpt is not None:
+            for ckpt in ckpts:
                 old_size = ckpt["base_model.fc.bias"].shape[0]
                 if not old_size == n_known_classes:
                     del ckpt["base_model.fc.weight"]
@@ -113,8 +118,7 @@ def get_model(args, n_known_classes, device, ckpt):
             output_num = 768
 
             if args.model == "DINO":
-                if not args.checkpoint_path:
-                    raise AssertionError("Specify ckpt for DINO")
+                assert ckpts, "Cannot perform eval without a pretrained model"
 
                 # we set num_classes to 0 in order to obtain pooled feats
                 model = timm.create_model("deit_base_patch16_224", pretrained=True, num_classes=0)
@@ -217,17 +221,26 @@ def get_model(args, n_known_classes, device, ckpt):
         model = wrapper(model, output_num, n_known_classes)
 
     elif args.network == "resend":
-        assert args.only_eval and ckpt is not None, "Cannot perform eval without a pretrained model"
+        assert args.only_eval and ckpts, "Cannot perform eval without a pretrained model"
 
         from models.resend import ReSeND
 
         model = ReSeND(n_known_classes=n_known_classes)
         output_num = model.output_num
+
     else:
         raise NotImplementedError(f"Network {args.network} not implemented")
 
-    if ckpt is not None and args.wise_ft_alpha > 0:
-        print(f"Loading checkpoint {args.checkpoint_path}")
-        _load_ckpt(model, ckpt, args.wise_ft_alpha, device)
+    if ckpts:
+        assert len(ckpts) <= 2
+        assert wise_ft_alpha >= 0 and wise_ft_alpha <= 1, "WiSE-FT alpha must be between 0 and 1"
+        ckpts = [_clean_ckpt(ckpt, model) for ckpt in ckpts]
+        ckpt = ckpts[0]  # from args.checkpoint_path
+        if wise_ft_alpha < 1:
+            zeroshot_ckpt = ckpts[1] if len(ckpts) == 2 else model.to(device).state_dict()
+            ckpt = _interpolate_ckpts(zeroshot_ckpt, ckpt, wise_ft_alpha)
+        print(f"Loading weights")
+        missing, unexpected = model.load_state_dict(ckpt, strict=False)
+        print(f"Missing keys: {missing}, unexpected keys: {unexpected}")
 
     return model, output_num, contrastive_enabled
