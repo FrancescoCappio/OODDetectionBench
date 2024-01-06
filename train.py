@@ -37,10 +37,9 @@ def get_args():
     parser.add_argument("--data_order", type=int, default=-1, help="Which data order to use if more than one is available")
 
     # model parameters
-    parser.add_argument("--network", type=str, default="resnet101", choices=["resnet101", "vit", "resend", 
-                                                                             "resnetv2_101x3"])
-    parser.add_argument("--model", type=str, default="CE", choices=["CE", "simclr", "supclr", "cutmix", "CSI", "supCSI", "clip", "DINO", 
-                                                                    "resend", "DINOv2", "BiT", "CE-IM22k", "random_init", "CE-IM21k"])
+    parser.add_argument("--network", type=str, default="resnet101", choices=["resnet101", "vit", "resend", "resnetv2_101x3"])
+    parser.add_argument("--model", type=str, default="CE", choices=["CE", "simclr", "supclr", "CSI", "supCSI", "clip", "DINO", 
+                                                                    "resend", "DINOv2", "BiT", "CE-IM22k", "CE-IM21k", "random_init"])
     parser.add_argument("--evaluator", type=str, help="Strategy to compute normality scores", default="prototypes_distance",
                         choices=["prototypes_distance", "MSP", "MLS", "ODIN", "energy", "gradnorm", "mahalanobis", "gram", "knn_distance",
                                  "linear_probe", "MCM", "knn_ood", "resend", "react", "flow", "EVM", "EVM_norm", "ASH"])
@@ -119,7 +118,6 @@ class Trainer:
         if self.args.evaluator == "gram":
             # this method needs a split of support data to be used as validation set 
             self.support_test_loader, self.support_val_loader = split_train_loader(self.support_test_loader, args.seed)
-
         self.args.n_known_classes = self.n_known_classes
 
         ### Model ###
@@ -130,14 +128,13 @@ class Trainer:
         self.model, self.output_num, self.contrastive_enabled = get_model(self.args)
         if args.model == "clip":
             self.clip_model = self.model
-
         self.args.output_num = self.output_num
 
         self.to_device(self.device)
 
         self.raw_model = self.model # maintain access to the "raw" internal module in case of DDP
         if self.args.distributed:
-            self.model = DDP(self.raw_model, find_unused_parameters=True)
+            self.model = DDP(self.model, find_unused_parameters=True)
 
         print("Number of parameters: ", count_parameters(self.model))
 
@@ -157,17 +154,15 @@ class Trainer:
         # similarity based scores instead of L2 distance based ones
         cosine_similarity = self.args.model in ["simclr", "supclr", "CSI", "supCSI"] and self.contrastive_enabled
 
-        args = self.args
-
         if self.args.evaluator == "prototypes_distance":
-            metrics = prototypes_distance_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
+            metrics = prototypes_distance_evaluator(self.args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model, contrastive_head=self.contrastive_enabled,
                                                     cosine_sim=cosine_similarity)
         elif self.args.evaluator == "MSP":
-            metrics = MSP_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
+            metrics = MSP_evaluator(self.args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
         elif self.args.evaluator == "MLS":
-            metrics = MLS_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
+            metrics = MLS_evaluator(self.args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
         elif self.args.evaluator == "ODIN":
             metrics = ODIN_evaluator(train_loader=self.support_test_loader, test_loader=self.target_loader,
@@ -182,7 +177,7 @@ class Trainer:
                                                     device=self.device, model=self.model)
 
         elif self.args.evaluator == "react":
-            metrics = react_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
+            metrics = react_evaluator(self.args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
 
         elif self.args.evaluator == "mahalanobis":
@@ -197,42 +192,42 @@ class Trainer:
                                     test_loader=self.target_loader, device=self.device, model=self.model, finetuned=not self.args.only_eval)
 
         elif self.args.evaluator == "knn_ood":
-            metrics = knn_ood_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
+            metrics = knn_ood_evaluator(self.args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                         device=self.device, model=self.model, contrastive_head=self.contrastive_enabled, K=self.args.NNK,
                                         k_means=self.args.k_means)
 
         elif self.args.evaluator == "knn_distance":
-            metrics = knn_distance_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
+            metrics = knn_distance_evaluator(self.args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                             device=self.device, model=self.model, contrastive_head=self.contrastive_enabled, K=self.args.NNK,
                                             k_means=self.args.k_means, cosine_sim=cosine_similarity)
 
         elif self.args.evaluator == "linear_probe":
-            metrics = linear_probe_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
+            metrics = linear_probe_evaluator(self.args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                             device=self.device, model=self.model, contrastive_head=self.contrastive_enabled)
 
         elif self.args.evaluator == "EVM":
-            metrics = EVM_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
+            metrics = EVM_evaluator(self.args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                             device=self.device, model=self.model, contrastive_head=self.contrastive_enabled)
 
         elif self.args.evaluator == "EVM_norm":
-            metrics = EVM_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
+            metrics = EVM_evaluator(self.args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                             device=self.device, model=self.model, contrastive_head=self.contrastive_enabled, normalize=True)
 
         elif self.args.evaluator == "MCM":
             assert self.args.model == "clip", "MCM evaluator supports only clip based models!"
-            metrics = MCM_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
+            metrics = MCM_evaluator(self.args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model, clip_model=self.clip_model, known_class_names=self.known_class_names)
 
         elif self.args.evaluator == "resend":
-            metrics = resend_evaluator(args,train_loader=self.support_test_loader, test_loader=self.target_loader,
+            metrics = resend_evaluator(self.args,train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
 
         elif self.args.evaluator == "ASH":
-            metrics = ASH_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader,
+            metrics = ASH_evaluator(self.args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
 
         elif self.args.evaluator == "flow":
-            metrics = flow_evaluator(args, train_loader=self.support_test_loader, test_loader=self.target_loader, device=self.device,
+            metrics = flow_evaluator(self.args, train_loader=self.support_test_loader, test_loader=self.target_loader, device=self.device,
                                             model=self.model)
 
         else:
