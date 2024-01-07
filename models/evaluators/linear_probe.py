@@ -1,23 +1,29 @@
-import torch 
-from sklearn.linear_model import LogisticRegression
 import numpy as np
-from models.evaluators.common import prepare_ood_labels, calc_ood_metrics, run_model, closed_set_accuracy
+import torch
+from sklearn.linear_model import LogisticRegression
+
+from models.evaluators.common import calc_ood_metrics, closed_set_accuracy, prepare_ood_labels, run_model
+
 
 @torch.no_grad()
-def linear_probe_evaluator(args, train_loader, test_loader, device, model, contrastive_head=False): 
-    # this evaluator trains a logistic regression model on top of the frozen source features 
-    # MSP is then applied to compute test normality scores 
+def linear_probe_evaluator(args, train_loader, test_loader, device, model, contrastive_head=False):
+    # this evaluator trains a logistic regression model on top of the frozen source features
+    # MSP is then applied to compute test normality scores
     print("Running linear probe evaluator")
 
     # first we extract features for both source and target data
-    train_logits, train_feats, train_lbls = run_model(args, model, train_loader, device, contrastive=contrastive_head, support=True)
-    test_logits, test_feats, test_lbls = run_model(args, model, test_loader, device, contrastive=contrastive_head, support=False)
+    train_logits, train_feats, train_lbls = run_model(
+        args, model, train_loader, device, contrastive=contrastive_head, support=True
+    )
+    test_logits, test_feats, test_lbls = run_model(
+        args, model, test_loader, device, contrastive=contrastive_head, support=False
+    )
 
     # Perform logistic regression
-    classifier = LogisticRegression(random_state=0, C=0.316, max_iter=1000, solver='liblinear')
+    classifier = LogisticRegression(random_state=0, C=0.316, max_iter=1000, solver="liblinear")
     classifier.fit(train_feats, train_lbls)
     # Evaluate on the target features
-    pred_prob = classifier.predict_proba(test_feats) # get the softmax probability for each class
+    pred_prob = classifier.predict_proba(test_feats)  # get the softmax probability for each class
     # Get the maximum softmax probability
     max_pred_prob = np.amax(pred_prob, axis=1)
 
@@ -35,6 +41,4 @@ def linear_probe_evaluator(args, train_loader, test_loader, device, model, contr
     metrics = calc_ood_metrics(max_pred_prob, ood_labels)
     metrics["cs_acc"] = cs_acc
 
-    return metrics 
-
-
+    return metrics

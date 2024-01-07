@@ -256,35 +256,6 @@ def get_train_dataloader(args):
     return train_loader
 
 
-def split_train_loader(train_loader, seed):
-    whole_dataset = train_loader.dataset
-    total_len = len(whole_dataset)
-    train_split_len = int(0.8 * total_len)
-    val_split_len = total_len - train_split_len
-
-    train_set, val_set = torch.utils.data.random_split(
-        whole_dataset,
-        (train_split_len, val_split_len),
-        generator=torch.Generator().manual_seed(seed),
-    )
-
-    batch_size, drop_last = train_loader.batch_size, train_loader.drop_last
-
-    train_loader, val_loader = tuple(
-        torch.utils.data.DataLoader(
-            ds,
-            batch_size=batch_size,
-            shuffle=True,
-            num_workers=NUM_WORKERS,
-            pin_memory=True,
-            drop_last=drop_last,
-        )
-        for ds in (train_set, val_set)
-    )
-
-    return train_loader, val_loader
-
-
 def get_val_transform(args):
     norm_stats = get_norm_stats(args)
 

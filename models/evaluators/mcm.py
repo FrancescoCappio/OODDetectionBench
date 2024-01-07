@@ -1,10 +1,12 @@
-import torch
 import clip
-from models.evaluators.common import prepare_ood_labels, calc_ood_metrics, run_model, closed_set_accuracy
+import torch
+
 from models.common import normalize_feats
+from models.evaluators.common import calc_ood_metrics, closed_set_accuracy, prepare_ood_labels, run_model
+
 
 @torch.no_grad()
-def MCM_evaluator(args, train_loader, test_loader, model, clip_model, device, known_class_names): 
+def MCM_evaluator(args, train_loader, test_loader, model, clip_model, device, known_class_names):
     print("Running MCM evaluator with known class names:")
     print(known_class_names)
     # implements NeurIPS 2022: https://openreview.net/forum?id=KnCS9390Va
@@ -23,9 +25,9 @@ def MCM_evaluator(args, train_loader, test_loader, model, clip_model, device, kn
     print(f"Num known: {ood_labels.sum()}. Num unknown: {len(test_lbls) - ood_labels.sum()}.")
 
     # prepare "concept prototypes" by using known class names and text encoder
-    # prompt taken from original implementation 
+    # prompt taken from original implementation
     text_inputs = torch.cat([clip.tokenize(f"a photo of a {c}.") for c in known_class_names]).to(device)
-    
+
     concept_prototypes = clip_model.to(device).encode_text(text_inputs)
     concept_prototypes = normalize_feats(concept_prototypes)
     test_feats = torch.from_numpy(test_feats).to(device).half()
@@ -43,6 +45,4 @@ def MCM_evaluator(args, train_loader, test_loader, model, clip_model, device, kn
     metrics = calc_ood_metrics(max_pred_prob, ood_labels)
     metrics["cs_acc"] = cs_acc
 
-    return metrics 
-
-
+    return metrics

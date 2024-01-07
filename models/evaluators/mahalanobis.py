@@ -4,6 +4,7 @@ from tqdm import tqdm
 
 from models.evaluators.common import prepare_ood_labels, calc_ood_metrics
 
+
 def mahalanobis_evaluator(train_loader, test_loader, device, model):
     # implements neurips 2018: https://papers.nips.cc/paper/2018/hash/abdeb6f575ac5c6676b747bca8d09cc2-Abstract.html
 
@@ -70,10 +71,12 @@ def mahalanobis_evaluator(train_loader, test_loader, device, model):
 
     return calc_ood_metrics(m_scores[-1], ood_labels)
 
+
 # function to extract the multiple features
 def model_feature_list(model, x):
     logits, feats = model(x)
     return logits, [feats]
+
 
 def sample_estimator(model, num_classes, feature_list, train_loader, device):
     """
@@ -145,6 +148,7 @@ def sample_estimator(model, num_classes, feature_list, train_loader, device):
     print('Training Accuracy:({:.2f}%)'.format(100. * correct / total))
 
     return sample_class_mean, precision
+
 
 def get_Mahalanobis_score(model, test_loader, num_classes, net_type, sample_mean, precision, layer_index, magnitude, device):
     '''

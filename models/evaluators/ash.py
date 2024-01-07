@@ -5,7 +5,8 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from models.evaluators.common import prepare_ood_labels, calc_ood_metrics, run_model, closed_set_accuracy
+from models.evaluators.common import calc_ood_metrics, closed_set_accuracy, prepare_ood_labels, run_model
+
 
 def ash_b_flattened(x, percentile=65):
     s1 = x.sum(dim=1)
@@ -16,6 +17,7 @@ def ash_b_flattened(x, percentile=65):
     fill = fill.unsqueeze(dim=1).expand(v.shape)
     x.zero_().scatter_(dim=1, index=i, src=fill)
     return x
+
 
 @torch.no_grad()
 def _iterate_data_ASH(model, loader, device, energy_temper=1):
@@ -30,7 +32,7 @@ def _iterate_data_ASH(model, loader, device, energy_temper=1):
         raise NotImplementedError("Don't know how to access fc")
 
     for batch in tqdm(loader):
-        images, labels = batch 
+        images, labels = batch
         images = images.to(device)
         gt_list.append(labels)
 
@@ -38,24 +40,25 @@ def _iterate_data_ASH(model, loader, device, energy_temper=1):
         _, feats = model(images)
 
         # we need unflattened features but we have flattened ones
-        #import ipdb; ipdb.set_trace() 
+        # import ipdb; ipdb.set_trace()
         # apply ash
         feats = ash_b_flattened(feats)
-        #feats = torch.flatten(feats,1)
+        # feats = torch.flatten(feats,1)
 
         logits = fc(feats)
 
-        # apply energy 
+        # apply energy
         conf = energy_temper * torch.logsumexp(logits / energy_temper, dim=1)
 
         confs.append(conf.cpu())
 
     return torch.cat(confs), torch.cat(gt_list)
 
+
 def ASH_evaluator(args, train_loader, test_loader, device, model):
     # implements ICLR 2023: https://openreview.net/forum?id=ndYXTEL6cZz
     # original code taken from: https://github.com/andrijazz/ash
-    
+
     train_lbls = train_loader.dataset.labels
     # ood labels have 1 for known samples and 0 for unknown ones
     known_labels = torch.unique(torch.tensor(train_lbls))
@@ -67,4 +70,4 @@ def ASH_evaluator(args, train_loader, test_loader, device, model):
 
     metrics = calc_ood_metrics(normality_scores, ood_labels)
 
-    return metrics 
+    return metrics

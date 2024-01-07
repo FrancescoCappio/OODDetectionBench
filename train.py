@@ -10,7 +10,7 @@ from torch import nn, optim
 from torch.distributed.elastic.multiprocessing.errors import record
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from models.data_helper import check_data_consistency, get_eval_dataloader, get_train_dataloader, split_train_loader
+from models.data_helper import check_data_consistency, get_eval_dataloader, get_train_dataloader
 from models.evaluators import *
 from models.models_helper import get_model
 from utils.dist_utils import is_main_process
@@ -41,8 +41,8 @@ def get_args():
     parser.add_argument("--model", type=str, default="CE", choices=["CE", "simclr", "supclr", "CSI", "supCSI", "clip", "DINO", 
                                                                     "resend", "DINOv2", "BiT", "CE-IM22k", "CE-IM21k", "random_init"])
     parser.add_argument("--evaluator", type=str, help="Strategy to compute normality scores", default="prototypes_distance",
-                        choices=["prototypes_distance", "MSP", "MLS", "ODIN", "energy", "gradnorm", "mahalanobis", "gram", "knn_distance",
-                                 "linear_probe", "MCM", "knn_ood", "resend", "react", "flow", "EVM", "EVM_norm", "ASH"])
+                        choices=["prototypes_distance", "MSP", "mahalanobis", "knn_distance", "knn_ood",
+                                 "linear_probe", "MCM", "resend", "react", "flow", "ASH"])
 
     # evaluators-specific parameters 
     parser.add_argument("--NNK", help="K value to use for Knn distance evaluator", type=int, default=1)
@@ -115,9 +115,6 @@ class Trainer:
 
         # load the support and test set dataloaders 
         self.target_loader, self.support_test_loader, self.known_class_names, self.n_known_classes = get_eval_dataloader(self.args)
-        if self.args.evaluator == "gram":
-            # this method needs a split of support data to be used as validation set 
-            self.support_test_loader, self.support_val_loader = split_train_loader(self.support_test_loader, args.seed)
         self.args.n_known_classes = self.n_known_classes
 
         ### Model ###
@@ -161,75 +158,36 @@ class Trainer:
         elif self.args.evaluator == "MSP":
             metrics = MSP_evaluator(self.args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
-        elif self.args.evaluator == "MLS":
-            metrics = MLS_evaluator(self.args, train_loader=self.support_test_loader, test_loader=self.target_loader,
-                                                    device=self.device, model=self.model)
-        elif self.args.evaluator == "ODIN":
-            metrics = ODIN_evaluator(train_loader=self.support_test_loader, test_loader=self.target_loader,
-                                                    device=self.device, model=self.model)
-
-        elif self.args.evaluator == "energy":
-            metrics = energy_evaluator(train_loader=self.support_test_loader, test_loader=self.target_loader,
-                                                    device=self.device, model=self.model)
-
-        elif self.args.evaluator == "gradnorm":
-            metrics = gradnorm_evaluator(train_loader=self.support_test_loader, test_loader=self.target_loader,
-                                                    device=self.device, model=self.model)
-
         elif self.args.evaluator == "react":
             metrics = react_evaluator(self.args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
-
         elif self.args.evaluator == "mahalanobis":
             metrics = mahalanobis_evaluator(train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
-
-        elif self.args.evaluator == "gram":
-            if self.args.only_eval:
-                print("The gram evaluator exploits cls predictions on train data to estimate statistics that are later used for computing normality scores.")
-                print("If the model is not finetuned the statistics will not be much relevant")
-            metrics = gram_evaluator(train_loader=self.support_test_loader, val_loader=self.support_val_loader, 
-                                    test_loader=self.target_loader, device=self.device, model=self.model, finetuned=not self.args.only_eval)
-
         elif self.args.evaluator == "knn_ood":
             metrics = knn_ood_evaluator(self.args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                         device=self.device, model=self.model, contrastive_head=self.contrastive_enabled, K=self.args.NNK,
                                         k_means=self.args.k_means)
-
         elif self.args.evaluator == "knn_distance":
             metrics = knn_distance_evaluator(self.args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                             device=self.device, model=self.model, contrastive_head=self.contrastive_enabled, K=self.args.NNK,
                                             k_means=self.args.k_means, cosine_sim=cosine_similarity)
-
         elif self.args.evaluator == "linear_probe":
             metrics = linear_probe_evaluator(self.args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                             device=self.device, model=self.model, contrastive_head=self.contrastive_enabled)
-
-        elif self.args.evaluator == "EVM":
-            metrics = EVM_evaluator(self.args, train_loader=self.support_test_loader, test_loader=self.target_loader,
-                                            device=self.device, model=self.model, contrastive_head=self.contrastive_enabled)
-
-        elif self.args.evaluator == "EVM_norm":
-            metrics = EVM_evaluator(self.args, train_loader=self.support_test_loader, test_loader=self.target_loader,
-                                            device=self.device, model=self.model, contrastive_head=self.contrastive_enabled, normalize=True)
-
         elif self.args.evaluator == "MCM":
             assert self.args.model == "clip", "MCM evaluator supports only clip based models!"
             metrics = MCM_evaluator(self.args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model, clip_model=self.clip_model, known_class_names=self.known_class_names)
-
         elif self.args.evaluator == "resend":
             metrics = resend_evaluator(self.args,train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
-
         elif self.args.evaluator == "ASH":
             metrics = ASH_evaluator(self.args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                                     device=self.device, model=self.model)
-
         elif self.args.evaluator == "flow":
             metrics = flow_evaluator(self.args, train_loader=self.support_test_loader, test_loader=self.target_loader, device=self.device,
                                             model=self.model)
-
         else:
             raise NotImplementedError(f"Unknown evaluator {self.args.evaluator}")
 
@@ -290,10 +248,6 @@ class Trainer:
         ### Prepare data ###
         
         train_loader = get_train_dataloader(self.args)
-
-        if self.args.evaluator == "gram":
-            # this method needs a split of support data to be used as validation set 
-            train_loader, _ = split_train_loader(train_loader, self.args.seed)
 
         check_data_consistency(train_loader, self.support_test_loader)
 
