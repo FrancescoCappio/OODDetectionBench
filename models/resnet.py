@@ -1,19 +1,19 @@
+import types
+
 import torch
 from torch import nn
 from torchvision import models
-import types
 
 
 def get_resnet(network, ckpt=None, n_known_classes=1000, random_init=False):
-
     if network != "resnet101":
         raise NotImplementedError(f"Unknown network {network}")
 
-    if random_init: 
+    if random_init:
         model = models.resnet101()
     else:
         model = models.resnet101(weights=models.ResNet101_Weights.IMAGENET1K_V1)
-    
+
     if ckpt is not None:
         model.load_state_dict(ckpt, strict=True)
 
@@ -36,7 +36,7 @@ def get_resnet(network, ckpt=None, n_known_classes=1000, random_init=False):
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)
 
-        return self.fc(x), x 
+        return self.fc(x), x
 
     model.forward = types.MethodType(feats_forward, model)
 

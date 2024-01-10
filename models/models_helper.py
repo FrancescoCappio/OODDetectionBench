@@ -190,7 +190,7 @@ def get_model(args):
             output_num = 1024
             model = wrapper(dinov2_vitb14, output_num, args.n_known_classes)
 
-        elif args.model == "CE-IM22k" or args.model == "CE-IM21k":
+        elif args.model == "CE-IN21k":
             # https://huggingface.co/google/vit-large-patch16-224-in21k
             from transformers import ViTModel
 

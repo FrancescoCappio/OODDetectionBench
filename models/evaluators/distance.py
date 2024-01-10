@@ -5,7 +5,7 @@ from tqdm import tqdm
 
 from models.common import normalize_feats
 from models.evaluators.common import calc_ood_metrics, closed_set_accuracy, prepare_ood_labels, run_model
-from utils.utils import compute_R2, compute_ranking_index, plot_tsne
+from utils.utils import compute_ranking_index
 
 
 def get_euclidean_normality_scores(test_features, prototypes):
@@ -42,31 +42,6 @@ def compute_prototypes(train_feats, train_lbls, normalize=False):
     if normalize:
         prototypes = normalize_feats(prototypes)
     return prototypes
-
-
-def compute_centroids(train_feats, train_lbls, n_clusters):
-    from sklearn.cluster import KMeans
-
-    print(f"Computing {n_clusters} centroids")
-    classes = np.unique(train_lbls)
-    centroids = []
-    centroids_lbls = []
-    for cl in tqdm(classes):
-        feats = train_feats[train_lbls == cl]
-        n_samples = feats.shape[0]
-        if n_clusters < n_samples:
-            cl_centroids = KMeans(n_clusters, n_init="auto").fit(feats).cluster_centers_
-            centroids.append(cl_centroids)
-            centroids_lbls.append(np.full(n_clusters, cl))
-        else:
-            print(
-                f"WARNING: the number of centroids ({n_clusters}) is greater or equal than the one of samples ({n_samples})"
-            )
-            centroids.append(feats)
-            centroids_lbls.append(np.full(n_samples, cl))
-    centroids = np.concatenate(centroids, axis=0)
-    centroids_lbls = np.concatenate(centroids_lbls, axis=0)
-    return centroids, centroids_lbls
 
 
 @torch.no_grad()
@@ -138,7 +113,6 @@ def knn_distance_evaluator(
     model,
     contrastive_head=False,
     K=50,
-    k_means=-1,
     normalize=False,
     cosine_sim=False,
 ):
@@ -160,25 +134,6 @@ def knn_distance_evaluator(
         train_feats = normalize_feats(train_feats)
         test_feats = normalize_feats(test_feats)
 
-    if k_means > 0:
-        index_feats, index_lbls = centroids, centroids_lbls = compute_centroids(
-            train_feats, train_lbls, n_clusters=k_means
-        )
-    else:
-        centroids = centroids_lbls = None
-        index_feats, index_lbls = train_feats, train_lbls
-
-    if args.enable_TSNE:
-        plot_tsne(
-            args,
-            support_feats=train_feats,
-            support_lbls=train_lbls,
-            test_feats=test_feats,
-            test_lbls=test_lbls,
-            centroids=centroids,
-            centroids_lbls=centroids_lbls,
-        )
-
     if cosine_sim:
         # returns neighbours with decreasing similarity (nearest to farthest)
         index = faiss.IndexFlatIP(train_feats.shape[1])
@@ -186,9 +141,9 @@ def knn_distance_evaluator(
         # returns neighbours with increasing distance (nearest to farthest)
         index = faiss.IndexFlatL2(train_feats.shape[1])
 
-    index.add(index_feats)
+    index.add(train_feats)
     D, train_NN_ids = index.search(test_feats, K)
-    train_NN_lbls = index_lbls[train_NN_ids]
+    train_NN_lbls = train_lbls[train_NN_ids]
     test_predictions = np.array([np.bincount(pred_NN_lbls).argmax() for pred_NN_lbls in train_NN_lbls])
 
     if args.enable_ratio_NN_unknown:
@@ -197,11 +152,9 @@ def knn_distance_evaluator(
     KD = D[:, -1]  # distance for k-th Nearest neighbours
     if cosine_sim:
         test_normality_scores = KD
-        distances = 1 - KD  # cosine distance
     else:
         # (inverted) distance from Kth nearest neighbour is the normality score
         test_normality_scores = -KD
-        distances = KD
 
     print(f"Num known: {ood_labels.sum()}. Num unknown: {len(test_lbls) - ood_labels.sum()}.")
 
@@ -210,14 +163,7 @@ def knn_distance_evaluator(
 
     metrics = calc_ood_metrics(test_normality_scores, ood_labels)
     metrics["cs_acc"] = cs_acc
-    metrics["avg_dist"] = distances.mean()
-    metrics["avg_dist_id"] = distances[ood_labels == 1].mean()
-    metrics["avg_dist_ood"] = distances[ood_labels == 0].mean()
 
-    if not args.disable_R2:
-        metric = "cosine_distance" if normalize else "euclidean_distance"
-        metrics["support_R2"] = compute_R2(train_feats, train_lbls, metric)
-        metrics["id_ood_R2"] = compute_R2(test_feats, ood_labels, metric)
     if args.enable_ranking_index:
         metric = "cosine_distance" if normalize else "euclidean_distance"
         metrics["ranking_index"] = compute_ranking_index(train_feats, train_lbls, metric)
@@ -228,7 +174,7 @@ def knn_distance_evaluator(
 
 
 @torch.no_grad()
-def knn_ood_evaluator(args, train_loader, test_loader, device, model, contrastive_head=False, K=50, k_means=-1):
+def knn_ood_evaluator(args, train_loader, test_loader, device, model, contrastive_head=False, K=50):
     # implements ICML 2022: https://proceedings.mlr.press/v162/sun22d.html
     # similar to standard knn evaluator, but apply normalize before L2 distance
 
@@ -240,6 +186,5 @@ def knn_ood_evaluator(args, train_loader, test_loader, device, model, contrastiv
         model,
         contrastive_head=contrastive_head,
         K=K,
-        k_means=k_means,
         normalize=True,
     )

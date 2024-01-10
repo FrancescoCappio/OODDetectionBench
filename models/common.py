@@ -11,13 +11,15 @@ from .nf import build_nf_head
 
 BATCH_NORM_EPSILON = 1e-5
 
+
 def normalize_feats(feats):
     if isinstance(feats, torch.Tensor):
-        return feats/feats.norm(dim=1,keepdim=True).expand(-1,feats.shape[1])
+        return feats / feats.norm(dim=1, keepdim=True).expand(-1, feats.shape[1])
     elif isinstance(feats, np.ndarray):
-        return feats/np.linalg.norm(feats, axis=1, keepdims=True)
+        return feats / np.linalg.norm(feats, axis=1, keepdims=True)
     else:
         raise NotImplementedError("Unknown type")
+
 
 class SimCLRContrastiveHead(nn.Module):
     def __init__(self, channels_in, out_dim=128, num_layers=3):
@@ -41,6 +43,7 @@ class SimCLRContrastiveHead(nn.Module):
             x = b(x)
         return normalize_feats(x)
 
+
 class CSIContrastiveHead(nn.Module):
     def __init__(self, channels_in, out_dim=128):
         super().__init__()
@@ -52,6 +55,7 @@ class CSIContrastiveHead(nn.Module):
 
     def forward(self, x):
         return normalize_feats(self.simclr_layer(x))
+
 
 class DINOHead(nn.Module):
     def __init__(self, in_dim, out_dim, use_bn=False, norm_last_layer=True, nlayers=3, hidden_dim=2048, bottleneck_dim=256):
@@ -76,7 +80,7 @@ class DINOHead(nn.Module):
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
-            trunc_normal_(m.weight, std=.02)
+            trunc_normal_(m.weight, std=0.02)
             if isinstance(m, nn.Linear) and m.bias is not None:
                 nn.init.constant_(m.bias, 0)
 
@@ -86,10 +90,12 @@ class DINOHead(nn.Module):
         x = self.last_layer(x)
         return x
 
-class WrapperWithContrastiveHead(nn.Module): 
+
+class WrapperWithContrastiveHead(nn.Module):
     """
-    Wrap a base model composed of a Backbone + fc (cls head) adding a parallel contrastive head 
+    Wrap a base model composed of a Backbone + fc (cls head) adding a parallel contrastive head
     """
+
     def __init__(self, base_model, out_dim, contrastive_type="simclr", add_cls_head=False, n_classes=100):
         """
         Arguments:
@@ -111,11 +117,11 @@ class WrapperWithContrastiveHead(nn.Module):
             self.contrastive_head = SimCLRContrastiveHead(channels_in=out_dim, out_dim=self.contrastive_out_dim)
         elif contrastive_type == "CSI":
             self.contrastive_head = CSIContrastiveHead(channels_in=out_dim, out_dim=self.contrastive_out_dim)
-        elif contrastive_type  == "DINO":
+        elif contrastive_type == "DINO":
             self.contrastive_out_dim = 65536
             self.contrastive_head = DINOHead(in_dim=out_dim, out_dim=self.contrastive_out_dim)
 
-    def forward(self, x, contrastive=False): 
+    def forward(self, x, contrastive=False):
         if self.add_cls_head:
             feats = self.base_model(x)
             logits = self.fc(feats)
@@ -130,17 +136,18 @@ class WrapperWithFC(nn.Module):
     """
     Wrap a base model adding a final fc on top of it
     """
+
     def __init__(self, base_model, out_dim, n_classes, half_precision=False, base_output_map=None):
         """
-        Arguments: 
+        Arguments:
             base_model (nn.Module)
-            out_dim (int): output size of the base model 
+            out_dim (int): output size of the base model
             n_classes (int): output_size of the wrapper
             half_precision (bool): use half precision for fc
             base_output_map (fn): extract feats from base model output
         """
         super().__init__()
-        self.base_model = base_model 
+        self.base_model = base_model
         self.fc = nn.Linear(in_features=out_dim, out_features=n_classes)
         self.half_precision = half_precision
         self.base_output_map = base_output_map

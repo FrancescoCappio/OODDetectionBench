@@ -1,10 +1,12 @@
+import os
 import pickle
+
 import torch
 import torch.distributed as dist
-import os
+
 
 def get_max_cpu_count():
-    if hasattr(os, 'sched_getaffinity'):
+    if hasattr(os, "sched_getaffinity"):
         try:
             max_num_worker_suggest = len(os.sched_getaffinity(0))
             cpuset_checked = True
@@ -20,12 +22,14 @@ def get_max_cpu_count():
         return 1
     return max_num_worker_suggest
 
+
 def get_world_size():
     if not dist.is_available():
         return 1
     if not dist.is_initialized():
         return 1
     return dist.get_world_size()
+
 
 def all_gather(data):
     """
@@ -68,6 +72,7 @@ def all_gather(data):
         data_list.append(pickle.loads(buffer))
 
     return data_list
+
 
 def is_main_process(args):
     if not args.distributed:

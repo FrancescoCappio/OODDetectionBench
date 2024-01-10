@@ -28,7 +28,7 @@ NUM_WORKERS = 4
 
 def get_norm_stats(args):
     mode = "ImageNet1k"
-    if args.model == "BiT" or args.model == "CE-IM22k":
+    if args.model == "BiT" or args.model == "CE-IN21k":
         mode = "BiT"
     elif args.model == "clip":
         mode = "CLIP"
@@ -135,9 +135,7 @@ def get_eval_dataloader(args):
         test_ID_txt_path = path.join(PATH_TO_TXT, args.dataset, f"{args.support}_test.txt")
         test_OOD_txt_path = path.join(PATH_TO_TXT, args.dataset, f"{args.test}.txt")
         names_test_ID, labels_test_ID = _get_dataset_info_from_txt(test_ID_txt_path)
-        names_test_OOD, labels_test_OOD = _get_dataset_info_from_txt(
-            test_OOD_txt_path, lbl_delta=n_known_classes
-        )
+        names_test_OOD, labels_test_OOD = _get_dataset_info_from_txt(test_OOD_txt_path, lbl_delta=n_known_classes)
         names_test = names_test_ID + names_test_OOD
         labels_test = labels_test_ID + labels_test_OOD
 
@@ -150,9 +148,7 @@ def get_eval_dataloader(args):
         names_support, labels_support, cls_idx_to_name = get_dataset_split_info(
             args.dataset, args.support, args.data_order
         )
-        names_test, labels_test, _ = get_dataset_split_info(
-            args.dataset, args.test, args.data_order
-        )
+        names_test, labels_test, _ = get_dataset_split_info(args.dataset, args.test, args.data_order)
 
         known_class_names = [name for _, name in sorted(cls_idx_to_name.items())]
         n_known_classes = len(known_class_names)
@@ -215,9 +211,7 @@ def get_train_dataloader(args):
 
         if path_dataset is None:
             path_dataset = get_root_dir(args.dataset)
-        names_supports, labels_supports, _ = get_dataset_split_info(
-            args.dataset, args.support, args.data_order
-        )
+        names_supports, labels_supports, _ = get_dataset_split_info(args.dataset, args.support, args.data_order)
 
     if args.few_shot > 0:
         names_supports, labels_supports = few_shot_subsample(
@@ -279,26 +273,16 @@ def get_train_transform(args):
 
     img_tr = []
 
-    img_tr.append(
-        transforms.RandomResizedCrop(
-            (int(args.image_size), int(args.image_size)), (min_scale, max_scale)
-        )
-    )
+    img_tr.append(transforms.RandomResizedCrop((int(args.image_size), int(args.image_size)), (min_scale, max_scale)))
 
-    if args.rand_augment:
-        print("Using RandAugment")
-        img_tr.append(transforms.RandAugment(num_ops=2, magnitude=9))
-    else:
-        if random_horiz_flip > 0.0:
-            img_tr.append(transforms.RandomHorizontalFlip(random_horiz_flip))
-        if jitter > 0.0:
-            img_tr.append(
-                transforms.ColorJitter(
-                    brightness=jitter, contrast=jitter, saturation=jitter, hue=min(0.5, jitter)
-                )
-            )
-        if random_grayscale:
-            img_tr.append(transforms.RandomGrayscale(random_grayscale))
+    if random_horiz_flip > 0.0:
+        img_tr.append(transforms.RandomHorizontalFlip(random_horiz_flip))
+    if jitter > 0.0:
+        img_tr.append(
+            transforms.ColorJitter(brightness=jitter, contrast=jitter, saturation=jitter, hue=min(0.5, jitter))
+        )
+    if random_grayscale:
+        img_tr.append(transforms.RandomGrayscale(random_grayscale))
 
     img_tr = img_tr + [
         transforms.ToTensor(),

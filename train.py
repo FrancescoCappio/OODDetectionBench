@@ -18,10 +18,6 @@ from utils.log_utils import LogUnbuffered, count_parameters, gen_train_log_msg
 from utils.optim import LinearWarmupCosineAnnealingLR
 from utils.utils import get_aux_modules_dict
 
-try:
-    import wandb 
-except: 
-    pass
 
 def get_args():
     parser = argparse.ArgumentParser("OODDetectionBench")
@@ -30,8 +26,8 @@ def get_args():
 
     parser.add_argument("--path_dataset", type=str, default=None, help="Base data path")
 
-    parser.add_argument("--dataset", help="Dataset name",
-                        choices=["domainnet", "dtd", "patternnet", "stanford_cars", "sun", "mcm_bench"])
+    # dataset
+    parser.add_argument("--dataset", help="Dataset name", choices=["domainnet", "dtd", "patternnet", "stanford_cars", "sun", "mcm_bench"])
     parser.add_argument("--support", help="support split name")
     parser.add_argument("--test", help="test split name")
     parser.add_argument("--data_order", type=int, default=-1, help="Which data order to use if more than one is available")
@@ -39,17 +35,14 @@ def get_args():
     # model parameters
     parser.add_argument("--network", type=str, default="resnet101", choices=["resnet101", "vit", "resend", "resnetv2_101x3"])
     parser.add_argument("--model", type=str, default="CE", choices=["CE", "simclr", "supclr", "CSI", "supCSI", "clip", "DINO", 
-                                                                    "resend", "DINOv2", "BiT", "CE-IM22k", "CE-IM21k", "random_init"])
+                                                                    "resend", "DINOv2", "BiT", "CE-IN21k", "random_init"])
     parser.add_argument("--evaluator", type=str, help="Strategy to compute normality scores", default="prototypes_distance",
                         choices=["prototypes_distance", "MSP", "mahalanobis", "knn_distance", "knn_ood",
                                  "linear_probe", "MCM", "resend", "react", "flow", "ASH"])
 
     # evaluators-specific parameters 
     parser.add_argument("--NNK", help="K value to use for Knn distance evaluator", type=int, default=1)
-    parser.add_argument("--k_means", type=int, default=-1, help="Number of centroids for Knn distance evaluator (if any)")
     parser.add_argument("--disable_contrastive_head", action='store_true', default=False, help="Do not use contrastive head for distance-based evaluators")
-    parser.add_argument("--disable_R2", action='store_true', default=False, help="Disable R2 computation for a slight speed up in evals")
-    parser.add_argument("--enable_TSNE", action='store_true', default=False, help="Plot and save t-SNE representations of extracted features")
     parser.add_argument("--enable_ratio_NN_unknown", action='store_true', default=False, help="Compute ratio of test OOD samples whose NN is another OOD sample")
     parser.add_argument("--enable_ranking_index", action='store_true', default=False, help="Compute ranking index")
 
@@ -58,18 +51,16 @@ def get_args():
     parser.add_argument("--train_batch_size", type=int, default=64, help="Batch size for training data loader")
     parser.add_argument("--eval_batch_size", type=int, default=16, help="Batch size for test data loaders")
     parser.add_argument("--few_shot", type=int, default=-1, help="Number of training samples for each class, -1 means use whole dataset")
-    parser.add_argument("--rand_augment", action="store_true", default=False, help="Use RandAugment strategy for data augmentation")
 
     # finetuning params 
     parser.add_argument("--iterations", type=int, default=100, help="Number of finetuning iterations")
-    parser.add_argument("--epochs", type=int, default=-1, help="Use value >= 0 if you want to specify training length in terms of epochs")
+    parser.add_argument("--epochs", type=int, default=25, help="Use value >= 0 if you want to specify training length in terms of epochs")
     parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate for finetuning, automatically multiplied by world size")
     parser.add_argument("--warmup_iters", type=int, default=0, help="Number of lr warmup iterations")
-    parser.add_argument("--warmup_epochs", type=int, default=-1, help="Number of lr warmup epochs, to use when train len specified with epochs")
+    parser.add_argument("--warmup_epochs", type=int, default=5, help="Number of lr warmup epochs, to use when train len specified with epochs")
     parser.add_argument("--freeze_backbone", action="store_true", default=False, help="Train only cls head during finetuning")
     parser.add_argument("--clip_grad", default=-1, type=float, help="If > 0 used as clip grad value")
     parser.add_argument("--resume", default=False, action='store_true', help="Resume from last ckpt")
-    parser.add_argument("--label_smoothing", type=float, default=0, help="Label smoothing for loss computation")
 
     # NF
     parser.add_argument("--nf_head", action="store_true", default=False)
@@ -80,14 +71,12 @@ def get_args():
     parser.add_argument("--seed", type=int, default=42, help="Random seed for data splitting")
 
     # checkpoint evaluation
-    parser.add_argument("--only_eval", action='store_true', default=False,
-                        help="If you want only to evaluate a checkpoint")
+    parser.add_argument("--only_eval", action='store_true', default=False, help="If you want only to evaluate a checkpoint")
     parser.add_argument("--checkpoint_path", type=str, default="", help="Path to pretrained checkpoint")
 
     # WiSE-FT
     parser.add_argument("--wise_ft_alpha", type=float, default=1, help="Alpha value for WiSE-FT interpolation")
-    parser.add_argument("--wise_ft_zs_ckpt_path", type=str, default="",
-                        help="Path to zeroshot checkpoint for WiSE-FT interpolation (optional)")
+    parser.add_argument("--wise_ft_zs_ckpt_path", type=str, default="", help="Path to zeroshot checkpoint for WiSE-FT interpolation (optional)")
 
     # output_folder for checkpoints
     parser.add_argument("--save_ckpt", action='store_true', default=False, help="Should save the training output checkpoint to --output_dir?")
@@ -95,16 +84,13 @@ def get_args():
     parser.add_argument("--debug", action='store_true', default=False, help="Run in debug mode, disable file logger")
     parser.add_argument("--print_args", action='store_true', default=False, help="Print args to stdout")
 
-    # save run on wandb 
-    parser.add_argument("--wandb", action='store_true', default=False, help="Save this run on wandb")
-    parser.add_argument("--suffix", type=str, default="", help="Additional suffix for the run name on wandb")
-
     # performance options 
     parser.add_argument("--on_disk", action='store_true', default=False, help="Save/Recover extracted features on the disk. To be used for really large ID datasets (e.g. ImageNet)")
     
     args = parser.parse_args()
 
     return args
+
 
 class Trainer:
     def __init__(self, args, device):
@@ -166,12 +152,11 @@ class Trainer:
                                                     device=self.device, model=self.model)
         elif self.args.evaluator == "knn_ood":
             metrics = knn_ood_evaluator(self.args, train_loader=self.support_test_loader, test_loader=self.target_loader,
-                                        device=self.device, model=self.model, contrastive_head=self.contrastive_enabled, K=self.args.NNK,
-                                        k_means=self.args.k_means)
+                                        device=self.device, model=self.model, contrastive_head=self.contrastive_enabled, K=self.args.NNK)
         elif self.args.evaluator == "knn_distance":
             metrics = knn_distance_evaluator(self.args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                             device=self.device, model=self.model, contrastive_head=self.contrastive_enabled, K=self.args.NNK,
-                                            k_means=self.args.k_means, cosine_sim=cosine_similarity)
+                                            cosine_sim=cosine_similarity)
         elif self.args.evaluator == "linear_probe":
             metrics = linear_probe_evaluator(self.args, train_loader=self.support_test_loader, test_loader=self.target_loader,
                                             device=self.device, model=self.model, contrastive_head=self.contrastive_enabled)
@@ -193,13 +178,8 @@ class Trainer:
 
         optional_metrics = [
             ("cs_acc", "Closed set accuracy"),
-            ("support_R2", "Support set R2 score"),
-            ("id_ood_R2", "Test ID-OOD R2 score"),
             ("ratio_NN_unknown", "Ratio NN unknown"),
             ("ranking_index", "Ranking index"),
-            ("avg_dist", "Avg dist"),
-            ("avg_dist_id", "Avg dist ID"),
-            ("avg_dist_ood", "Avg dist OOD"),
         ]
 
         for id, name in optional_metrics:
@@ -209,9 +189,6 @@ class Trainer:
         auroc = metrics["auroc"]
         fpr_auroc = metrics["fpr_at_95_tpr"]
         print(f"Auroc,FPR95: {auroc:.4f},{fpr_auroc:.4f}")
-
-        if self.args.wandb and is_main_process(self.args):
-            wandb.log(metrics)
 
     def save_ckpt(self, aux_modules=None, iteration=None):
         if self.args.save_ckpt and (not self.args.distributed or self.args.global_rank == 0):
@@ -246,14 +223,14 @@ class Trainer:
         self.to_train()
 
         ### Prepare data ###
-        
+
         train_loader = get_train_dataloader(self.args)
 
         check_data_consistency(train_loader, self.support_test_loader)
 
         ### Adjust n_iters and lr ###
 
-        if self.args.epochs > 0: 
+        if self.args.epochs > 0:
             iters_per_epoch = len(train_loader)
             self.args.iterations = self.args.epochs * iters_per_epoch
             if self.args.warmup_epochs > 0:
@@ -264,8 +241,8 @@ class Trainer:
 
         ### Prepare loss, optimizer and scheduler ###
 
-        # loss function 
-        loss_fn = nn.CrossEntropyLoss(label_smoothing=self.args.label_smoothing)
+        # loss function
+        loss_fn = nn.CrossEntropyLoss()
 
         def get_optim_sched(params, lr):
             optim_ = optim.Adam(params, lr=lr, weight_decay=1e-5)
@@ -319,13 +296,13 @@ class Trainer:
         ### Training loop ###
 
         for it in range(start_it, self.args.iterations):
-            try: 
+            try:
                 batch = next(train_iter)
             except StopIteration:
                 train_iter = iter(train_loader)
                 batch = next(train_iter)
 
-            images, labels = batch 
+            images, labels = batch
             images = images.to(self.device)
             labels = labels.to(self.device)
 
@@ -360,10 +337,8 @@ class Trainer:
                 if self.args.nf_head:
                     optims_dict["nf"] = optimizer_nf
                     losses_dict["nf"] = running_loss_nf
-                log_msg, wandb_log_data = gen_train_log_msg(it, self.args.iterations, optims_dict, losses_dict, train_acc, log_period)
+                log_msg = gen_train_log_msg(it, self.args.iterations, optims_dict, losses_dict, train_acc, log_period)
                 print(log_msg)
-                if self.args.wandb and is_main_process(self.args):
-                    wandb.log(wandb_log_data, step=it)
                 running_loss = 0
                 if self.args.nf_head:
                     running_loss_nf = 0
@@ -375,7 +350,7 @@ class Trainer:
                     aux_modules.update(get_aux_modules_dict(optimizer_nf, scheduler_nf, suffix="nf"))
                 self.save_ckpt(aux_modules, it)
 
-        # save final checkpoint 
+        # save final checkpoint
         self.save_ckpt()
 
 
@@ -388,7 +363,7 @@ def main():
 
     ### Set torch device ###
     if torch.cuda.is_available():
-        if hasattr(args, 'local_rank') and not args.local_rank is None:
+        if hasattr(args, "local_rank") and not args.local_rank is None:
             assert False, "Please use torchrun for distributed execution"
 
         if "LOCAL_RANK" in environ:
@@ -406,9 +381,9 @@ def main():
         device = torch.device("cpu")
 
     if args.distributed:
-        dist.init_process_group('nccl')
+        dist.init_process_group("nccl")
         args.n_gpus = dist.get_world_size()
-        args.global_rank = int(environ['RANK'])
+        args.global_rank = int(environ["RANK"])
         print("Process rank", args.global_rank, "starting")
 
     if args.output_dir and is_main_process(args):
@@ -425,30 +400,16 @@ def main():
     if not args.debug:
         orig_stdout = sys.stdout
         orig_stderr = sys.stderr
-
         sys.stdout = LogUnbuffered(args, orig_stdout, stdout_file)
         sys.stderr = LogUnbuffered(args, orig_stderr, stderr_file)
 
-    if args.wandb and is_main_process(args):
-        run_name=f"{args.network}_{args.model}_{args.evaluator}_{args.dataset}_{args.support}_{args.test}"
-        if not args.data_order == -1:
-            run_name += f"_{args.data_order}"
-        if args.suffix:
-            run_name += f"_{args.suffix}"
-
-        wandb.init(
-            project="OODDetectionFramework",
-            config=vars(args),
-            name=run_name,
-        )
-    
     if args.print_args:
         print(args)
 
     print("###############################################################################")
     print("######################### OOD Detection Benchmark #############################")
     print("###############################################################################")
-    
+
     if args.evaluator in ["gram", "ODIN", "energy", "gradnorm", "mahalanobis", "react"]:
         assert not args.distributed, f"{args.evaluator} evaluator does not support distributed execution!"
 

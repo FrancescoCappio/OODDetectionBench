@@ -9,19 +9,17 @@ def count_parameters(model):
 
 
 def gen_train_log_msg(it, n_iters, optims_dict, losses_dict, train_acc, log_period):
-    wandb_data = {}
     log_msg_fields = [f"Iterations: {it+1:6d}/{n_iters}"]
 
     # get the log and wandb suffixes given the item's name
-    get_suffixes = lambda name: (f"({name})", f"_{name}") if name else ("", "")
+    get_suffix = lambda name: f"({name})" if name else ""
 
     # LR
     lr_msg_fields = []
     for optim_name, optim_ in optims_dict.items():
         current_lr = optim_.param_groups[0]["lr"]
-        msg_suffix, wandb_suffix = get_suffixes(optim_name)
+        msg_suffix = get_suffix(optim_name)
         lr_msg_fields.append(f"{current_lr:.6f}{msg_suffix}")
-        wandb_data[f"lr{wandb_suffix}"] = current_lr
     lr_msg = ", ".join(lr_msg_fields)
     log_msg_fields.append(f"LR: {lr_msg}")
 
@@ -29,19 +27,17 @@ def gen_train_log_msg(it, n_iters, optims_dict, losses_dict, train_acc, log_peri
     loss_msg_fields = []
     for loss_name, loss_ in losses_dict.items():
         avg_loss = loss_ / log_period
-        msg_suffix, wandb_suffix = get_suffixes(loss_name)
+        msg_suffix = get_suffix(loss_name)
         loss_msg_fields.append(f"{avg_loss:6.4f}{msg_suffix}")
-        wandb_data[f"loss{wandb_suffix}"] = avg_loss
     loss_msg = ", ".join(loss_msg_fields)
     log_msg_fields.append(f"Loss: {loss_msg}")
 
     # Acc
-    wandb_data["acc"] = train_acc
     log_msg_fields.append(f"Acc: {train_acc:6.4f}")
 
     log_msg = "\t".join(log_msg_fields)
 
-    return log_msg, wandb_data
+    return log_msg
 
 
 class LogUnbuffered:
