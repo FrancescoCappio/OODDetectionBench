@@ -113,7 +113,7 @@ def get_eval_dataloader(args):
     print(f"Dataset: {args.dataset}, train_data: {args.support}, test_data: {args.test}", end="")
     print(f", data_order: {args.data_order}") if args.data_order >= 0 else print()
 
-    if args.dataset == "mcm_bench":
+    if args.dataset == "mos_bench":
         if path_dataset is None:
             path_dataset = DEFAULT_PATH_DATASET
 
@@ -199,7 +199,7 @@ def get_train_dataloader(args):
     print(f"Dataset: {args.dataset}, train_data: {args.support}", end="")
     print(f", data_order: {args.data_order}") if args.data_order >= 0 else print()
 
-    if args.dataset == "mcm_bench":
+    if args.dataset == "mos_bench":
         if path_dataset is None:
             path_dataset = DEFAULT_PATH_DATASET
         train_dataset_txt_path = path.join(PATH_TO_TXT, args.dataset, f"{args.support}.txt")

@@ -24,13 +24,12 @@ def get_args():
 
     parser.add_argument("--local_rank", type=int)  # automatically passed by torch.distributed.launch
 
-    parser.add_argument("--path_dataset", type=str, default=None, help="Base data path")
-
     # dataset
-    parser.add_argument("--dataset", help="Dataset name", choices=["domainnet", "dtd", "patternnet", "stanford_cars", "sun", "mcm_bench"])
+    parser.add_argument("--dataset", help="Dataset name", choices=["domainnet", "dtd", "patternnet", "stanford_cars", "sun", "mos_bench"])
     parser.add_argument("--support", help="support split name")
     parser.add_argument("--test", help="test split name")
     parser.add_argument("--data_order", type=int, default=-1, help="Which data order to use if more than one is available")
+    parser.add_argument("--path_dataset", type=str, default=None, help="Base data path (only used for 'mos_bench' dataset)")
 
     # model parameters
     parser.add_argument("--network", type=str, default="resnet101", choices=["resnet101", "vit", "resend", "resnetv2_101x3"])
