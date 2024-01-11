@@ -42,7 +42,7 @@ def get_args():
 
     # evaluators-specific parameters 
     parser.add_argument("--NNK", help="K value to use for Knn distance evaluator", type=int, default=1)
-    parser.add_argument("--disable_contrastive_head", action='store_true', default=False, help="Do not use contrastive head for distance-based evaluators")
+    parser.add_argument("--enable_contrastive_head", action='store_true', default=False, help="Do not use contrastive head for distance-based evaluators")
     parser.add_argument("--enable_ratio_NN_unknown", action='store_true', default=False, help="Compute ratio of test OOD samples whose NN is another OOD sample")
     parser.add_argument("--enable_ranking_index", action='store_true', default=False, help="Compute ranking index")
 

@@ -78,7 +78,7 @@ def get_model(args):
             model, output_num = get_resnet(args.network, n_known_classes=args.n_known_classes, random_init=True)
 
         elif args.model in ["simclr", "supclr", "CSI", "supCSI"]:
-            contrastive_enabled = not args.disable_contrastive_head
+            contrastive_enabled = args.enable_contrastive_head
             if args.only_eval:
                 assert ckpts, "Cannot perform eval without a pretrained model"
 
@@ -88,7 +88,7 @@ def get_model(args):
 
             base_model, output_num = get_resnet(args.network, n_known_classes=args.n_known_classes)
             model = WrapperWithContrastiveHead(base_model, out_dim=output_num, contrastive_type=contrastive_type)
-            if not args.disable_contrastive_head:
+            if args.enable_contrastive_head:
                 output_num = model.contrastive_out_dim
 
             # if ckpt fc size does not match current size discard it
@@ -133,7 +133,7 @@ def get_model(args):
                 else:
                     # if we didn't need the contrastive head we could use the model from huggingface:
                     # https://huggingface.co/facebook/dino-vitb16
-                    contrastive_enabled = not args.disable_contrastive_head
+                    contrastive_enabled = args.enable_contrastive_head
                     from models.common import WrapperWithContrastiveHead
 
                     model = WrapperWithContrastiveHead(
@@ -143,7 +143,7 @@ def get_model(args):
                         add_cls_head=True,
                         n_classes=args.n_known_classes,
                     )
-                    if not args.disable_contrastive_head:
+                    if args.enable_contrastive_head:
                         output_num = model.contrastive_out_dim
 
             else:
