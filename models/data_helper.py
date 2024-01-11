@@ -120,14 +120,13 @@ def get_eval_dataloader(args):
         train_dataset_txt_path = path.join(PATH_TO_TXT, args.dataset, f"{args.support}.txt")
         names_support, labels_support = _get_dataset_info_from_txt(train_dataset_txt_path)
 
-        if args.support in ["stanford_cars", "cub_200", "oxford_pet", "imagenet"]:
-            class_names_file = path.join(PATH_TO_TXT, args.dataset, f"{args.support}_names.txt")
-            print(f"Reading class names from: {class_names_file}")
-            with open(class_names_file, "r") as f:
-                known_class_names = [name.strip() for name in f.readlines()]
-        else:
-            print("Attempt to extract class names from file paths")
-            known_class_names = _extract_known_class_names(names_support, labels_support)
+        if args.support != "imagenet":
+            raise ValueError(f"Unsupported support dataset {args.support}")
+
+        class_names_file = path.join(PATH_TO_TXT, args.dataset, f"{args.support}_names.txt")
+        print(f"Reading class names from: {class_names_file}")
+        with open(class_names_file, "r") as f:
+            known_class_names = [name.strip() for name in f.readlines()]
 
         n_known_classes = len(set(labels_support))
         known_class_names = known_class_names[:n_known_classes]
