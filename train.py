@@ -43,7 +43,6 @@ def get_args():
     parser.add_argument("--NNK", help="K value to use for Knn distance evaluator", type=int, default=1)
     parser.add_argument("--enable_contrastive_head", action='store_true', default=False, help="Do not use contrastive head for distance-based evaluators")
     parser.add_argument("--enable_ratio_NN_unknown", action='store_true', default=False, help="Compute ratio of test OOD samples whose NN is another OOD sample")
-    parser.add_argument("--enable_ranking_index", action='store_true', default=False, help="Compute ranking index")
 
     # data params
     parser.add_argument("--image_size", type=int, default=224, help="Image size")
@@ -178,7 +177,6 @@ class Trainer:
         optional_metrics = [
             ("cs_acc", "Closed set accuracy"),
             ("ratio_NN_unknown", "Ratio NN unknown"),
-            ("ranking_index", "Ranking index"),
         ]
 
         for id, name in optional_metrics:

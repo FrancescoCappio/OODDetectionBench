@@ -5,7 +5,6 @@ from tqdm import tqdm
 
 from models.common import normalize_feats
 from models.evaluators.common import calc_ood_metrics, closed_set_accuracy, prepare_ood_labels, run_model
-from utils.utils import compute_ranking_index
 
 
 def get_euclidean_normality_scores(test_features, prototypes):
@@ -164,9 +163,6 @@ def knn_distance_evaluator(
     metrics = calc_ood_metrics(test_normality_scores, ood_labels)
     metrics["cs_acc"] = cs_acc
 
-    if args.enable_ranking_index:
-        metric = "cosine_distance" if normalize else "euclidean_distance"
-        metrics["ranking_index"] = compute_ranking_index(train_feats, train_lbls, metric)
     if args.enable_ratio_NN_unknown:
         metrics["ratio_NN_unknown"] = ratio
 
