@@ -46,13 +46,13 @@ run_all_eval () {
 ### Fine-tuning-free ###
 
 # BiT ResNetV2-101x3 CE (IN-21K)
-for evaluator in knn_distance prototypes_distance
+for evaluator in knn_ood mahalanobis knn_distance prototypes_distance
 do
     run_all_eval resnetv2_101x3 BiT "$evaluator" "" "no"
 done
 
 # ViT-L CLIP
-for evaluator in MCM
+for evaluator in MCM knn_distance prototypes_distance
 do
     run_all_eval vit clip "$evaluator" "" "no"
 done
@@ -67,18 +67,6 @@ done
 ### Fine-tuning ###
 
 evaluators="MSP react knn_ood ASH flow"
-
-# ViT-B CE (IN-1K)
-for evaluator in $evaluators
-do
-    run_all_eval vit CE "$evaluator" "" "yes"
-done
-
-# ViT-B DINO (IN-1K)
-for evaluator in $evaluators
-do
-    run_all_eval vit DINO "$evaluator" "pretrained_models/DINO_vitb.pth" "yes"
-done
 
 # BiT ResNetV2-101x3 CE (IN-21K)
 for evaluator in $evaluators

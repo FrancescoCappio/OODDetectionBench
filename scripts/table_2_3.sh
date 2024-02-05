@@ -129,19 +129,19 @@ do
 done
 
 # ViT-L CE (IN-21K)
-for evaluator in knn_distance prototypes_distance
+for evaluator in knn_ood mahalanobis knn_distance prototypes_distance
 do
     run_all_eval vit CE-IN21k "$evaluator" ""
 done
 
 # BiT ResNetV2-101x3 CE (IN-21K)
-for evaluator in knn_distance prototypes_distance
+for evaluator in knn_ood mahalanobis knn_distance prototypes_distance
 do
     run_all_eval resnetv2_101x3 BiT "$evaluator" ""
 done
 
 # ViT-L CLIP
-for evaluator in MCM
+for evaluator in MCM knn_distance prototypes_distance
 do
     run_all_eval vit clip "$evaluator" ""
 done

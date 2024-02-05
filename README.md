@@ -80,7 +80,7 @@ The supported evaluation methods are:
 
 ## Running the code
 
-To **reproduce the paper's main results**, you can simply run the bash scripts contained in the `scripts` folder (in case of `wise_ft.sh` you may want to adjust the path pointing to your finetuned models, refer to the first line of the script).
+To **reproduce the paper's main results**, you can simply run the bash scripts contained in the `scripts` folder (in case of `table_6.sh` you may want to adjust the path pointing to your finetuned models, refer to the first line of the script).
 Below we report some extra details regarding the supported execution arguments.
 
 In order to evaluate a model, the generic command to run is the following:
