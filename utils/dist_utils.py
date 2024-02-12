@@ -1,6 +1,26 @@
+import os
 import pickle
+
 import torch
 import torch.distributed as dist
+
+
+def get_max_cpu_count():
+    if hasattr(os, "sched_getaffinity"):
+        try:
+            max_num_worker_suggest = len(os.sched_getaffinity(0))
+            cpuset_checked = True
+        except Exception:
+            pass
+    if max_num_worker_suggest is None:
+        # os.cpu_count() could return Optional[int]
+        # get cpu count first and check None in order to satify mypy check
+        cpu_count = os.cpu_count()
+        if cpu_count is not None:
+            max_num_worker_suggest = cpu_count
+    if max_num_worker_suggest is None:
+        return 1
+    return max_num_worker_suggest
 
 
 def get_world_size():
@@ -9,6 +29,7 @@ def get_world_size():
     if not dist.is_initialized():
         return 1
     return dist.get_world_size()
+
 
 def all_gather(data):
     """
@@ -24,7 +45,7 @@ def all_gather(data):
 
     # serialized to a Tensor
     buffer = pickle.dumps(data)
-    storage = torch.ByteStorage.from_buffer(buffer)
+    storage = torch.UntypedStorage.from_buffer(buffer, dtype=torch.uint8)
     tensor = torch.ByteTensor(storage).to("cuda")
 
     # obtain Tensor size of each rank
@@ -53,3 +74,8 @@ def all_gather(data):
     return data_list
 
 
+def is_main_process(args):
+    if not args.distributed:
+        return True
+    else:
+        return args.global_rank == 0

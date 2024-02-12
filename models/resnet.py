@@ -1,16 +1,19 @@
+import types
+
 import torch
 from torch import nn
 from torchvision import models
-import types
 
 
-def get_resnet(network, ckpt=None, n_known_classes=1000):
-
+def get_resnet(network, ckpt=None, n_known_classes=1000, random_init=False):
     if network != "resnet101":
         raise NotImplementedError(f"Unknown network {network}")
 
-    model = models.resnet101(pretrained=True)
-    
+    if random_init:
+        model = models.resnet101()
+    else:
+        model = models.resnet101(weights=models.ResNet101_Weights.IMAGENET1K_V1)
+
     if ckpt is not None:
         model.load_state_dict(ckpt, strict=True)
 
@@ -18,7 +21,8 @@ def get_resnet(network, ckpt=None, n_known_classes=1000):
 
     # we need default fc params to not change across runs
     torch.manual_seed(42)
-    model.fc = nn.Linear(in_features=output_num, out_features=n_known_classes)
+    if not n_known_classes == 1000:
+        model.fc = nn.Linear(in_features=output_num, out_features=n_known_classes)
 
     def feats_forward(self, x):
         x = self.conv1(x)
@@ -32,7 +36,7 @@ def get_resnet(network, ckpt=None, n_known_classes=1000):
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)
 
-        return self.fc(x), x 
+        return self.fc(x), x
 
     model.forward = types.MethodType(feats_forward, model)
 

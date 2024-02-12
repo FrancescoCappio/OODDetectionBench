@@ -4,6 +4,7 @@ from tqdm import tqdm
 
 from models.evaluators.common import prepare_ood_labels, calc_ood_metrics
 
+
 def mahalanobis_evaluator(train_loader, test_loader, device, model):
     # implements neurips 2018: https://papers.nips.cc/paper/2018/hash/abdeb6f575ac5c6676b747bca8d09cc2-Abstract.html
 
@@ -61,7 +62,7 @@ def mahalanobis_evaluator(train_loader, test_loader, device, model):
             m_scores = np.concatenate((m_scores, m_score.reshape((m_score.shape[0], -1))), axis=1)
 
     m_scores = np.asarray(m_scores, dtype=np.float32).T
-    ood_labels = prepare_ood_labels(known_labels, test_labels)
+    ood_labels = prepare_ood_labels(known_labels.numpy(), test_labels.numpy())
 
     print(f"Num known: {ood_labels.sum()}. Num unknown: {len(test_labels) - ood_labels.sum()}.")
     for l in range(len(m_scores)):
@@ -70,14 +71,12 @@ def mahalanobis_evaluator(train_loader, test_loader, device, model):
 
     return calc_ood_metrics(m_scores[-1], ood_labels)
 
+
 # function to extract the multiple features
 def model_feature_list(model, x):
     logits, feats = model(x)
     return logits, [feats]
 
-# function to extract a specific feature
-def model_intermediate_forward(model, x, layer_index):
-    return model(x)[1]
 
 def sample_estimator(model, num_classes, feature_list, train_loader, device):
     """
@@ -96,7 +95,7 @@ def sample_estimator(model, num_classes, feature_list, train_loader, device):
     list_features = [[0] * num_classes for _ in range(len(feature_list))]
 
     # for each model output layer, for each class, we extract for each sample 
-    # the per-channel mean feaure value
+    # the per-channel mean feature value
     for batch in tqdm(train_loader):
 
         data, target = batch
@@ -150,6 +149,7 @@ def sample_estimator(model, num_classes, feature_list, train_loader, device):
 
     return sample_class_mean, precision
 
+
 def get_Mahalanobis_score(model, test_loader, num_classes, net_type, sample_mean, precision, layer_index, magnitude, device):
     '''
     Compute the proposed Mahalanobis confidence score on input dataset
@@ -175,7 +175,7 @@ def get_Mahalanobis_score(model, test_loader, num_classes, net_type, sample_mean
         data, target = data.to(device), target.to(device)
         data.requires_grad = True
         
-        out_features = model_intermediate_forward(model, data, layer_index)
+        out_features = model(data)[1]
         
         # compute Mahalanobis score
         gaussian_score = 0
@@ -214,7 +214,7 @@ def get_Mahalanobis_score(model, test_loader, num_classes, net_type, sample_mean
         tempInputs = tempInputs.detach()
  
         # perform forward again 
-        noise_out_features = model_intermediate_forward(model, tempInputs, layer_index)
+        noise_out_features = model(tempInputs)[1]
 
         noise_gaussian_score = 0
         for i in range(num_classes):
